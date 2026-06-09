@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from orac.agents import build_core_agents
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
 from orac.intent_backbone import IntentBackbone, IntentField
@@ -102,6 +103,95 @@ def test_store_backed_scrum_loop_writes_audit_trail(tmp_path) -> None:
     assert all(entry.status == CapabilityStatus.ALLOWED.value for entry in log)
     audited_tools = {entry.tool for entry in log}
     assert {"minimal_path_planner", "verification_log", "handoff_tracker"} <= audited_tools
+
+
+def test_fs_read_requires_approval_then_allows(tmp_path) -> None:
+    store = _make_store(tmp_path)
+    store.grant("Simples", "fs_read")
+    broker = ToolBroker.from_store(store)
+    target = tmp_path / "note.txt"
+    target.write_text("hello orac", encoding="utf-8")
+    task = Task(title="read a file")
+    req = CapabilityRequest(
+        agent="Simples", tool="fs_read", task_id=task.id, args={"path": str(target)}
+    )
+
+    first = broker.request(req, task)
+    assert first.status is CapabilityStatus.PENDING
+    pending_id = first.data["pending_id"]
+    assert [p.id for p in store.list_pending()] == [pending_id]
+
+    # re-issuing while still pending must not duplicate the queue entry
+    again = broker.request(req, task)
+    assert again.status is CapabilityStatus.PENDING
+    assert [p.id for p in store.list_pending()] == [pending_id]
+
+    store.resolve_pending(pending_id, "approved")
+
+    allowed = broker.request(req, task)
+    assert allowed.status is CapabilityStatus.ALLOWED
+    assert allowed.data["content"] == "hello orac"
+
+
+def test_fs_read_missing_file_raises(tmp_path) -> None:
+    store = _make_store(tmp_path)
+    store.grant("Simples", "fs_read")
+    broker = ToolBroker.from_store(store)
+    task = Task(title="read a file")
+    req = CapabilityRequest(
+        agent="Simples",
+        tool="fs_read",
+        task_id=task.id,
+        args={"path": str(tmp_path / "does-not-exist.txt")},
+    )
+    store.create_pending(req)
+    store.resolve_pending(store.get_pending_id(req), "approved")
+
+    with pytest.raises(FileNotFoundError):
+        broker.request(req, task)
+
+
+def test_loop_parks_and_resumes_task_on_approval(tmp_path) -> None:
+    store = _make_store(tmp_path)
+    task = Task(title="Build the thing", description="Make it testable.")
+    intent = IntentBackbone()
+    for field in IntentField:
+        intent.answer(task, field, f"{field.value} answer")
+    intent.lock(task)  # task now READY
+
+    # Park the task on an as-yet-unresolved approval, as the loop would.
+    req = CapabilityRequest(agent="Simples", tool="fs_read", task_id=task.id)
+    pending_id = store.create_pending(req)
+    task.park_for_approval(pending_id, TaskStatus.READY)
+    board = Board(tasks=[task])
+
+    # While pending, the loop leaves the task parked.
+    Scrum(RulesBrain(), root=tmp_path).run(board, cycles=1)
+    assert board.tasks[0].status == TaskStatus.PENDING_APPROVAL
+
+    # After approval, the loop resumes it from READY and drives it to DONE.
+    store.resolve_pending(pending_id, "approved")
+    Scrum(RulesBrain(), root=tmp_path).run(board, cycles=3)
+    assert board.tasks[0].status == TaskStatus.DONE
+
+
+def test_agent_work_parks_task_on_pending(tmp_path) -> None:
+    store = _make_store(tmp_path)
+    store.grant("Simples", "fs_read")
+    broker = ToolBroker.from_store(store)
+    agent = next(a for a in build_core_agents(RulesBrain(), broker) if a.name == "Simples")
+    target = tmp_path / "note.txt"
+    target.write_text("hi", encoding="utf-8")
+    task = Task(title="read", status=TaskStatus.IN_PROGRESS)
+
+    # Drive a real approval-gated call through the agent's broker path.
+    agent._apply_builtin_action = lambda t: bool(
+        agent._use(t, "fs_read", path=str(target))
+    )
+    agent.work(task)
+
+    assert task.status == TaskStatus.PENDING_APPROVAL
+    assert task.metadata["pending_approval"]["resume_status"] == "in_progress"
 
 
 def test_rate_counter_increments(tmp_path) -> None:

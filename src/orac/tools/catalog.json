@@ -107,6 +107,12 @@
       "description": "Record the next owner and handoff reason.",
       "regular_use": "Used whenever task ownership changes between agents.",
       "inputs": ["task_id", "next_owner", "reason"]
+    },
+    {
+      "name": "fs_read",
+      "description": "Read a single UTF-8 text file from the local filesystem.",
+      "regular_use": "Real read-only adapter; requires human approval per path before the read runs.",
+      "inputs": ["task_id", "path"]
     }
   ]
 }

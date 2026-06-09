@@ -199,6 +199,50 @@ class BrokerStore:
             )
             return int(cursor.lastrowid)
 
+    def get_pending(self, pending_id: int) -> PendingApproval:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM pending_approvals WHERE id = ?", (pending_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"No pending approval {pending_id}.")
+        return self._pending_from_row(row)
+
+    def approval_status(self, req: CapabilityRequest) -> str | None:
+        """Return the approval state for an exact (agent, tool, args) request.
+
+        ``approved`` if a matching request was approved, ``pending`` if one is
+        still queued, otherwise ``None``. Matching on the canonical args lets the
+        same call be re-issued after approval and resolve to allowed.
+        """
+        args_json = json.dumps(req.args, sort_keys=True)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status FROM pending_approvals "
+                "WHERE agent = ? AND tool = ? AND args_json = ?",
+                (req.agent, req.tool, args_json),
+            ).fetchall()
+        statuses = {row["status"] for row in rows}
+        if "approved" in statuses:
+            return "approved"
+        if "pending" in statuses:
+            return "pending"
+        return None
+
+    def get_pending_id(self, req: CapabilityRequest) -> int:
+        """Return the id of the open pending row for this exact request."""
+        args_json = json.dumps(req.args, sort_keys=True)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM pending_approvals "
+                "WHERE agent = ? AND tool = ? AND args_json = ? AND status = 'pending' "
+                "ORDER BY id DESC LIMIT 1",
+                (req.agent, req.tool, args_json),
+            ).fetchone()
+        if row is None:
+            raise KeyError("No open pending approval for request.")
+        return int(row["id"])
+
     def list_pending(self) -> list[PendingApproval]:
         with self._connect() as conn:
             rows = conn.execute(

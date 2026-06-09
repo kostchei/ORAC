@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from orac.adapters import Adapter, default_adapters
 from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, Task
 from orac.tooling import RegularToolExecutor
+
+# Tools that touch a real external system and must clear a human approval before
+# they run. Journaling tools are not listed; they have no side effects.
+APPROVAL_REQUIRED: frozenset[str] = frozenset({"fs_read"})
 
 
 @dataclass
@@ -14,18 +19,21 @@ class ToolBroker:
 
     The broker is the new foundation the tool layer sits on: agents emit a
     :class:`CapabilityRequest`, the broker decides allowed / denied / pending /
-    error, and only on ``allowed`` does it dispatch to a handler. Today the only
-    backend is :class:`RegularToolExecutor` (in-memory journaling).
+    error, and only on ``allowed`` does it dispatch to a handler. Two backends
+    sit behind it: :class:`RegularToolExecutor` (in-memory journaling) and the
+    real :data:`~orac.adapters` (e.g. ``fs_read``, which touches the disk).
 
     Grants come either from the ``agents.json`` manifest (in-memory, used by
     tests and the no-DB path) or from a :class:`BrokerStore`. When a store is
-    attached, every decision is also written to the durable audit log — the
-    foundation the ``pending`` approval path and real adapters build on.
+    attached, every decision is written to the durable audit log, and tools in
+    ``approval_required`` are gated behind the pending-approval queue.
     """
 
     executor: RegularToolExecutor
     grants: dict[str, frozenset[str]]
     known_tools: frozenset[str]
+    adapters: dict[str, Adapter] = field(default_factory=dict)
+    approval_required: frozenset[str] = APPROVAL_REQUIRED
     store: BrokerStore | None = None
 
     @classmethod
@@ -43,6 +51,7 @@ class ToolBroker:
             executor=executor or RegularToolExecutor(),
             grants=grants,
             known_tools=cls._known_tools(),
+            adapters=default_adapters(),
         )
 
     @classmethod
@@ -52,12 +61,13 @@ class ToolBroker:
         """Build a broker whose grants and audit log live in SQLite.
 
         The store is the source of truth for grants; every decision is recorded
-        to the audit log.
+        to the audit log, and approval-gated tools route through the queue.
         """
         return cls(
             executor=executor or RegularToolExecutor(),
             grants=store.grants(),
             known_tools=cls._known_tools(),
+            adapters=default_adapters(),
             store=store,
         )
 
@@ -87,7 +97,45 @@ class ToolBroker:
                 message=f"Agent {req.agent!r} is not granted tool {req.tool!r}.",
             )
 
-        result = self.executor.run(req.tool, task, req.agent, **req.args)
+        if req.tool in self.approval_required:
+            gate = self._check_approval(req)
+            if gate is not None:
+                return gate
+
+        return self._dispatch(req, task)
+
+    def _check_approval(self, req: CapabilityRequest) -> CapabilityResult | None:
+        """Return a pending result if the request is not yet approved, else None.
+
+        Approval state is durable, so once a human approves the exact request the
+        agent can re-issue it and fall through to dispatch.
+        """
+        if self.store is None:
+            return CapabilityResult(
+                status=CapabilityStatus.ERROR,
+                tool=req.tool,
+                message=f"Tool {req.tool!r} is approval-gated and needs a store.",
+            )
+        status = self.store.approval_status(req)
+        if status == "approved":
+            return None
+        if status is None:
+            pending_id = self.store.create_pending(req)
+        else:
+            pending_id = self.store.get_pending_id(req)
+        return CapabilityResult(
+            status=CapabilityStatus.PENDING,
+            tool=req.tool,
+            message=f"Awaiting human approval for {req.tool!r}.",
+            data={"pending_id": pending_id},
+        )
+
+    def _dispatch(self, req: CapabilityRequest, task: Task) -> CapabilityResult:
+        adapter = self.adapters.get(req.tool)
+        if adapter is not None:
+            result = adapter(req)
+        else:
+            result = self.executor.run(req.tool, task, req.agent, **req.args)
         return CapabilityResult(
             status=CapabilityStatus.ALLOWED,
             tool=result.name,

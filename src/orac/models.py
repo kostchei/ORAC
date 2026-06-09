@@ -19,6 +19,7 @@ class TaskStatus(StrEnum):
     REVIEW = "review"
     DONE = "done"
     BLOCKED = "blocked"
+    PENDING_APPROVAL = "pending_approval"
 
 
 class CapabilityStatus(StrEnum):
@@ -96,6 +97,28 @@ class Task:
     def transition(self, status: TaskStatus) -> None:
         self.status = status
         self.updated_at = now_iso()
+
+    def park_for_approval(self, pending_id: int, resume_status: TaskStatus) -> None:
+        """Park the task waiting on a human approval.
+
+        The pending approval id and the status to return to are stored in
+        metadata so the loop can durably resume the task once the approval is
+        resolved — it survives a save/load round-trip of the board.
+        """
+        self.metadata["pending_approval"] = {
+            "id": pending_id,
+            "resume_status": resume_status.value,
+        }
+        self.transition(TaskStatus.PENDING_APPROVAL)
+
+    def resume_from_approval(self) -> TaskStatus:
+        """Restore the status the task held before it parked."""
+        info = self.metadata.pop("pending_approval", None)
+        if info is None:
+            raise ValueError("Task is not parked for approval.")
+        resume_status = TaskStatus(info["resume_status"])
+        self.transition(resume_status)
+        return resume_status
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
