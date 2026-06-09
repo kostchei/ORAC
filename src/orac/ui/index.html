@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ORAC</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>ORAC</h1>
+          <p>Local agent scrum registry</p>
+        </div>
+        <button id="run-cycle" type="button">Run Cycle</button>
+      </header>
+
+      <section class="grid">
+        <form id="request-form" class="panel request-panel">
+          <h2>Base Request</h2>
+          <label>
+            Title
+            <input id="request-title" required placeholder="What should ORAC work on?" />
+          </label>
+          <label>
+            Detail
+            <textarea id="request-description" rows="5" placeholder="Add the rough request, constraints, or context."></textarea>
+          </label>
+          <label>
+            Points
+            <input id="request-points" type="number" min="1" max="20" value="1" />
+          </label>
+          <button type="submit">Add Request</button>
+        </form>
+
+        <section class="panel">
+          <h2>Registry</h2>
+          <div id="stats" class="stats"></div>
+          <div id="tasks" class="tasks"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Resources</h2>
+          <div id="resources" class="resources"></div>
+          <h2>Model Policy</h2>
+          <div id="model-policy" class="resources"></div>
+        </section>
+      </section>
+
+      <section class="panel audio-panel">
+        <div class="panel-head">
+          <h2>Audio</h2>
+          <div class="audio-actions">
+            <button id="enable-audio" type="button">Enable Audio</button>
+            <button id="record-audio" type="button" disabled>Record</button>
+            <button id="stop-audio" type="button" disabled>Stop</button>
+            <button id="speak-audio" type="button" disabled>Speak</button>
+            <button id="install-audio" type="button">Install Audio Stack</button>
+          </div>
+        </div>
+        <div id="audio-status" class="audio-status"></div>
+        <div id="audio-transcript" class="audio-transcript"></div>
+      </section>
+
+      <section class="panel settings-panel">
+        <div class="panel-head">
+          <h2>Settings</h2>
+          <div class="audio-actions">
+            <button id="save-settings" type="button">Save Settings</button>
+            <button id="start-loop" type="button">Start Loop</button>
+            <button id="stop-loop" type="button">Stop Loop</button>
+          </div>
+        </div>
+        <div id="loop-status" class="settings-status"></div>
+        <form id="settings-form" class="settings-grid">
+          <label>
+            Monthly foundation budget USD
+            <input id="setting-monthly-foundation" type="number" step="0.01" min="0" />
+          </label>
+          <label>
+            Estimated foundation cycle USD
+            <input id="setting-cycle-cost" type="number" step="0.01" min="0" />
+          </label>
+          <label>
+            Agent wake interval seconds
+            <input id="setting-loop-interval" type="number" step="1" min="5" />
+          </label>
+          <label>
+            Agent cycles per tick
+            <input id="setting-loop-cycles" type="number" step="1" min="1" />
+          </label>
+          <label>
+            LM Studio URL
+            <input id="setting-lmstudio-url" />
+          </label>
+          <label>
+            Standard local model
+            <input id="setting-standard-model" placeholder="LM Studio model id" />
+          </label>
+          <label>
+            Small local model
+            <input id="setting-small-model" placeholder="LM Studio model id" />
+          </label>
+        </form>
+      </section>
+
+      <section class="panel timeline-panel">
+        <h2>Agent Interaction</h2>
+        <div id="timeline" class="timeline"></div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

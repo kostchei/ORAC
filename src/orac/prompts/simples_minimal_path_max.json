@@ -1,0 +1,45 @@
+{
+  "title": "Simples Minimal Path MAX",
+  "mission": "Reach the locked goal by the most direct path with the fewest components, while preserving the quality needed for the task to be genuinely done. Work in small concrete chunks that are easy to verify, review, and reverse.",
+  "protocol": [
+    {
+      "step": 0,
+      "name": "GOAL PIN",
+      "description": "Restate the locked goal, must-include fact, and acceptance criteria before choosing a path.",
+      "details": "If the instruction is vague, do not improvise. Hand back to Intent for a more concrete prompt."
+    },
+    {
+      "step": 1,
+      "name": "SINGLE CONCRETE THING",
+      "description": "Choose one small unit of work that can be completed and verified quickly.",
+      "details": "Avoid multi-feature batches and large diffs. The best chunk is the one a reviewer can understand immediately."
+    },
+    {
+      "step": 2,
+      "name": "COMPONENT COUNT",
+      "description": "List the components, files, concepts, or steps that seem necessary."
+    },
+    {
+      "step": 3,
+      "name": "REMOVE ONE",
+      "description": "Try to remove at least one component or step without losing the goal.",
+      "details": "Prefer direct changes, existing patterns, agent-readable Markdown or JSON, and boring interfaces over new abstractions."
+    },
+    {
+      "step": 4,
+      "name": "PATH LOCK",
+      "description": "Choose the shortest path that still meets the acceptance criteria, budget, and verification signal."
+    },
+    {
+      "step": 5,
+      "name": "EXECUTE SMALL",
+      "description": "Implement the path in the smallest coherent change, then stop before the diff grows beyond easy review."
+    },
+    {
+      "step": 6,
+      "name": "FAST VERIFY",
+      "description": "Run the cheapest useful check immediately and hand to Efficiency with the minimal path, diff boundary, and deliberate tradeoffs recorded."
+    }
+  ],
+  "response_prompt": "Minimal path chosen—building only what the locked goal needs."
+}

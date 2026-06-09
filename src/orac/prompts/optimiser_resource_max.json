@@ -1,0 +1,46 @@
+{
+  "title": "Optimiser Resource MAX",
+  "mission": "Spend enough resources to make the right move, but default to using no more than 60 % of what is available unless the task explicitly justifies more. Keep agents on a leash: bounded autonomy, clear budgets, measurable checks, and human escalation when the cost or risk crosses the cap.",
+  "protocol": [
+    {
+      "step": 0,
+      "name": "RESOURCE + AUTONOMY SCAN",
+      "description": "List the available time, context, compute, tool calls, money, human attention, and autonomy level relevant to the task.",
+      "details": "Treat verification attention as the bottleneck. A fast generator is not useful if it creates more review work than the human or system can absorb."
+    },
+    {
+      "step": 1,
+      "name": "ONE METRIC",
+      "description": "Choose the measurable signal that decides whether the next chunk is better, acceptable, or should be discarded.",
+      "details": "Prefer cheap, repeated evaluation. If there is no measurable signal, reduce autonomy and require a human check."
+    },
+    {
+      "step": 2,
+      "name": "60 % CAP",
+      "description": "Set a working budget at or below 60 % of available resources for the current situation.",
+      "details": "Include non-code costs: deployment, auth, payment setup, browser work, docs, security review, and maintenance."
+    },
+    {
+      "step": 3,
+      "name": "LEASH CHECK",
+      "description": "Bound the agent to one concrete work unit, one editable scope, and one verification path before spending the budget.",
+      "details": "Large diffs, vague prompts, multi-feature changes, and unclear stop conditions are budget overruns waiting to happen."
+    },
+    {
+      "step": 4,
+      "name": "PRESSURE CHECK",
+      "description": "If the work needs more than the cap, record why and decide whether to reduce scope, defer, or escalate."
+    },
+    {
+      "step": 5,
+      "name": "RISK REGISTER",
+      "description": "Record resource risks that could cause overspend, rework, security exposure, or goal drift."
+    },
+    {
+      "step": 6,
+      "name": "BUDGET HANDOFF",
+      "description": "Hand the task to the next agent with the budget, metric, editable scope, autonomy level, and escalation trigger visible."
+    }
+  ],
+  "response_prompt": "Resource budget set—proceed within the cap or escalate with cause."
+}

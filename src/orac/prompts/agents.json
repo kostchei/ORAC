@@ -1,0 +1,49 @@
+{
+  "agents": [
+    {
+      "slug": "intent",
+      "name": "Intent",
+      "purpose": "Remove ambiguity from tasks and ensure the actual goal is met.",
+      "prompt_file": "intent.md",
+      "protocol_file": "intent_translator_max.json",
+      "tools": ["intent_silent_scan", "clarification_question", "echo_check", "intent_lock", "intent_reset", "acceptance_criteria_editor", "assumption_log"],
+      "order": 10
+    },
+    {
+      "slug": "optimiser",
+      "name": "Optimiser",
+      "purpose": "Allocate resources and aim to spend up to 60% of available resources in any situation.",
+      "prompt_file": "optimiser.md",
+      "protocol_file": "optimiser_resource_max.json",
+      "tools": ["resource_budgeter", "capacity_checker", "risk_register"],
+      "order": 20
+    },
+    {
+      "slug": "simples",
+      "name": "Simples",
+      "purpose": "Find the most effective path with the fewest components needed to reach the goal.",
+      "prompt_file": "simples.md",
+      "protocol_file": "simples_minimal_path_max.json",
+      "tools": ["task_reader", "minimal_path_planner", "implementation_log"],
+      "order": 30
+    },
+    {
+      "slug": "efficiency",
+      "name": "Efficiency",
+      "purpose": "Find waste, dead code, and unnecessary structure; judge the design as if built from scratch with the patches already known.",
+      "prompt_file": "efficiency.md",
+      "protocol_file": "efficiency_waste_scan_max.json",
+      "tools": ["waste_scanner", "design_replay", "verification_log"],
+      "order": 40
+    },
+    {
+      "slug": "orchestrator",
+      "name": "Orchestrator",
+      "purpose": "Coordinate the agent loop and report progress back to the main task.",
+      "prompt_file": "orchestrator.md",
+      "protocol_file": "orchestrator_reporter_max.json",
+      "tools": ["task_reader", "status_reporter", "handoff_tracker"],
+      "order": 50
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "tools": [
+    {
+      "name": "intent_silent_scan",
+      "description": "Assess missing facts, constraints, and confidence before asking the user anything.",
+      "regular_use": "Used by Intent at Step 0 to decide whether the task can proceed.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "clarification_question",
+      "description": "Ask exactly one highest-impact clarification question.",
+      "regular_use": "Used by Intent at Step 1 until confidence reaches at least 95%.",
+      "inputs": ["task_id", "missing_field"]
+    },
+    {
+      "name": "echo_check",
+      "description": "Produce the one-sentence work-order confirmation before locking intent.",
+      "regular_use": "Used by Intent at Step 2 after clarification confidence is high enough.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "intent_lock",
+      "description": "Lock the agreed work order after YES-GO and allow downstream agents to build.",
+      "regular_use": "Used only after user agreement.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "intent_reset",
+      "description": "Clear the intent state and restart at silent scan.",
+      "regular_use": "Used when the user says RESET or the task goal changes materially.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "task_reader",
+      "description": "Read the task title, description, status, assignee, acceptance criteria, and work log.",
+      "regular_use": "Used before an agent changes task state or writes a work-log entry.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "acceptance_criteria_editor",
+      "description": "Create or update acceptance criteria for a task.",
+      "regular_use": "Used by Intent to turn an ambiguous request into checkable work.",
+      "inputs": ["task_id", "criteria"]
+    },
+    {
+      "name": "assumption_log",
+      "description": "Record assumptions, open questions, and goal risks.",
+      "regular_use": "Used when the task can proceed but still carries ambiguity.",
+      "inputs": ["task_id", "assumption", "impact"]
+    },
+    {
+      "name": "resource_budgeter",
+      "description": "Estimate and record how much of the available budget the task should consume.",
+      "regular_use": "Used by Optimiser to keep default effort near the 60% resource target.",
+      "inputs": ["task_id", "resource_type", "budget_limit"]
+    },
+    {
+      "name": "capacity_checker",
+      "description": "Compare task estimates against sprint or cycle capacity.",
+      "regular_use": "Used before pulling more work into active execution.",
+      "inputs": ["task_id", "available_capacity"]
+    },
+    {
+      "name": "risk_register",
+      "description": "Record risks that could cause overspend, rework, or goal drift.",
+      "regular_use": "Used when resource pressure or uncertainty changes the plan.",
+      "inputs": ["task_id", "risk", "mitigation"]
+    },
+    {
+      "name": "minimal_path_planner",
+      "description": "Choose the fewest components and steps needed to satisfy the goal.",
+      "regular_use": "Used by Simples before implementation starts.",
+      "inputs": ["task_id", "candidate_steps"]
+    },
+    {
+      "name": "implementation_log",
+      "description": "Record implementation progress and the concrete result produced.",
+      "regular_use": "Used by Simples while moving work toward review.",
+      "inputs": ["task_id", "change_summary"]
+    },
+    {
+      "name": "waste_scanner",
+      "description": "Inspect work for dead code, duplicate structure, and unnecessary components.",
+      "regular_use": "Used by Efficiency during review.",
+      "inputs": ["task_id", "scope"]
+    },
+    {
+      "name": "design_replay",
+      "description": "Re-evaluate the design as if it were built from scratch with the current patches already known.",
+      "regular_use": "Used by Efficiency to identify better final shapes after incremental changes.",
+      "inputs": ["task_id", "current_design"]
+    },
+    {
+      "name": "verification_log",
+      "description": "Record checks performed and whether the task meets the acceptance criteria.",
+      "regular_use": "Used before completing or blocking a task.",
+      "inputs": ["task_id", "checks", "result"]
+    },
+    {
+      "name": "status_reporter",
+      "description": "Summarize status, owner, next action, blockers, and completion signal.",
+      "regular_use": "Used by Orchestrator to report back to the main task.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "handoff_tracker",
+      "description": "Record the next owner and handoff reason.",
+      "regular_use": "Used whenever task ownership changes between agents.",
+      "inputs": ["task_id", "next_owner", "reason"]
+    }
+  ]
+}

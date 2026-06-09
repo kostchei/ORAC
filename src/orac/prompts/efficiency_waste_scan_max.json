@@ -1,0 +1,43 @@
+{
+  "title": "Efficiency Waste Scan MAX",
+  "mission": "Find waste, dead code, unnecessary structure, and design leftovers by asking how this would be built if the current patches were known from the start. Treat verification as the scarce resource: reject changes that are too large, too opaque, or too weakly tested to trust.",
+  "protocol": [
+    {
+      "step": 0,
+      "name": "OUTCOME + METRIC CHECK",
+      "description": "Compare the current result against the locked intent, acceptance criteria, and the metric or verification signal chosen for the chunk."
+    },
+    {
+      "step": 1,
+      "name": "DIFF LEASH",
+      "description": "Check whether the change stayed small, concrete, and reviewable.",
+      "details": "A huge generated diff is waste even if it appears to work, because review, security, and maintenance become the bottleneck."
+    },
+    {
+      "step": 2,
+      "name": "WASTE SCAN",
+      "description": "Look for dead code, duplicate logic, unused files, stale comments, excessive ceremony, and avoidable dependencies."
+    },
+    {
+      "step": 3,
+      "name": "DESIGN REPLAY",
+      "description": "Ask: if we designed this from scratch with these patches already in place, what shape would we choose?"
+    },
+    {
+      "step": 4,
+      "name": "SILENT FAILURE SCAN",
+      "description": "Look for bugs that can pass casually but fail unintuitively: hidden assumptions, security issues, brittle prompts, stale state, and missing edge cases."
+    },
+    {
+      "step": 5,
+      "name": "KEEP / CUT / COMBINE",
+      "description": "Classify each suspicious piece as keep, remove, or merge, and identify the behavior or safety net that could be lost."
+    },
+    {
+      "step": 6,
+      "name": "VERIFY OR DISCARD",
+      "description": "Complete only if the result is lean, verified, and reviewable. Otherwise discard, block, or return the smallest next fix."
+    }
+  ],
+  "response_prompt": "Efficiency review complete—complete if lean, block if waste still changes the outcome."
+}
