@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pathlib import Path
+
 from orac.adapters import Adapter, default_adapters
 from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
+from orac.code_adapters import code_adapters_for
 from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, Task
 from orac.tooling import RegularToolExecutor
 
@@ -37,7 +40,11 @@ class ToolBroker:
     store: BrokerStore | None = None
 
     @classmethod
-    def from_manifests(cls, executor: RegularToolExecutor | None = None) -> "ToolBroker":
+    def from_manifests(
+        cls,
+        executor: RegularToolExecutor | None = None,
+        repo_root: Path | str | None = None,
+    ) -> "ToolBroker":
         """Build a broker whose allow-list is derived from ``agents.json``.
 
         Each agent is granted exactly the tools its profile declares. This makes
@@ -51,25 +58,37 @@ class ToolBroker:
             executor=executor or RegularToolExecutor(),
             grants=grants,
             known_tools=cls._known_tools(),
-            adapters=default_adapters(),
+            adapters=cls._adapters(repo_root),
         )
 
     @classmethod
     def from_store(
-        cls, store: BrokerStore, executor: RegularToolExecutor | None = None
+        cls,
+        store: BrokerStore,
+        executor: RegularToolExecutor | None = None,
+        repo_root: Path | str | None = None,
     ) -> "ToolBroker":
         """Build a broker whose grants and audit log live in SQLite.
 
         The store is the source of truth for grants; every decision is recorded
-        to the audit log, and approval-gated tools route through the queue.
+        to the audit log, and approval-gated tools route through the queue. When
+        ``repo_root`` is given, the Builder's code adapters are registered,
+        confined to that root.
         """
         return cls(
             executor=executor or RegularToolExecutor(),
             grants=store.grants(),
             known_tools=cls._known_tools(),
-            adapters=default_adapters(),
+            adapters=cls._adapters(repo_root),
             store=store,
         )
+
+    @staticmethod
+    def _adapters(repo_root: Path | str | None) -> dict[str, Adapter]:
+        adapters = default_adapters()
+        if repo_root is not None:
+            adapters.update(code_adapters_for((repo_root,)))
+        return adapters
 
     @staticmethod
     def _known_tools() -> frozenset[str]:

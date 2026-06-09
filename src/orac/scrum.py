@@ -28,8 +28,14 @@ class Scrum:
         broker = None
         if self.root is not None:
             self.store = BrokerStore(self.root).init()
-            broker = ToolBroker.from_store(self.store)
+            broker = ToolBroker.from_store(self.store, repo_root=self.root)
         self.agents = build_core_agents(self.brain, broker)
+
+    @property
+    def council_agents(self) -> list[RuntimeAgent]:
+        """The review-loop agents. Doer subagents (e.g. Builder) are excluded —
+        they act when spawned, not in the round-robin council loop."""
+        return [agent for agent in self.agents if agent.profile.kind == "council"]
 
     def plan_sprint(self, board: Board, capacity: int) -> list[Task]:
         planned: list[Task] = []
@@ -62,7 +68,7 @@ class Scrum:
                 if task.status in self.SKIP_STATUSES:
                     continue
                 before = (task.status, len(task.work_log))
-                for agent in self.agents:
+                for agent in self.council_agents:
                     agent.work(task)
                 after = (task.status, len(task.work_log))
                 if after != before:

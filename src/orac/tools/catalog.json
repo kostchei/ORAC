@@ -113,6 +113,48 @@
       "description": "Read a single UTF-8 text file from the local filesystem.",
       "regular_use": "Real read-only adapter; requires human approval per path before the read runs.",
       "inputs": ["task_id", "path"]
+    },
+    {
+      "name": "repo.read_file",
+      "description": "Read a text file inside an approved repo root.",
+      "regular_use": "Builder reads source before changing it.",
+      "inputs": ["task_id", "path"]
+    },
+    {
+      "name": "repo.search",
+      "description": "Substring-search text files inside an approved repo root.",
+      "regular_use": "Builder locates code to change.",
+      "inputs": ["task_id", "query", "root"]
+    },
+    {
+      "name": "repo.write_file",
+      "description": "Write a text file inside an approved repo root.",
+      "regular_use": "Builder creates or edits code. Builder-only write capability.",
+      "inputs": ["task_id", "path", "content"]
+    },
+    {
+      "name": "repo.run_tests",
+      "description": "Run pytest inside an approved repo root and report pass/fail.",
+      "regular_use": "Builder verifies a change before it can reach done.",
+      "inputs": ["task_id", "root", "target"]
+    },
+    {
+      "name": "git.create_branch",
+      "description": "Create and check out a git branch in an approved repo root.",
+      "regular_use": "Builder checkpoints before changing files (engineered reversibility).",
+      "inputs": ["task_id", "root", "name"]
+    },
+    {
+      "name": "git.commit",
+      "description": "Stage all changes and commit in an approved repo root.",
+      "regular_use": "Builder records a reversible checkpoint. Push remains separate and gated.",
+      "inputs": ["task_id", "root", "message"]
+    },
+    {
+      "name": "git.status",
+      "description": "Show the porcelain working-tree status of an approved repo root.",
+      "regular_use": "Builder inspects pending changes.",
+      "inputs": ["task_id", "root"]
     }
   ]
 }

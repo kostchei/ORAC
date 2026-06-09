@@ -15,6 +15,7 @@ class AgentProfile:
     protocol_file: str
     tools: list[str]
     order: int
+    kind: str = "council"  # "council" = review-loop agent; "doer" = subagent (e.g. Builder)
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ def load_agent_profiles() -> list[AgentProfile]:
                 protocol_file=str(item["protocol_file"]),
                 tools=list(item.get("tools", [])),
                 order=int(item["order"]),
+                kind=str(item.get("kind", "council")),
             )
         )
     return sorted(profiles, key=lambda profile: profile.order)

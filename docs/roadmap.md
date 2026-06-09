@@ -32,10 +32,10 @@ comes first and groups 2–5 defer behind it. This doc is the master ordering; t
 Ordered; each step keeps the suite green.
 
 - [x] **P0 — Types.** `EdgeKind`, `LensDecision`, `ReviewContext`, `LensVerdict`, `CouncilVerdict` (+ risk vocabulary `Reversibility`/`Externality`/`RiskClass`) in `models.py`. No behaviour.
-- [ ] **P1 — Risk throttle.** `policy.py::risk_class(tool, args) -> (reversibility, externality)` + throttle table. Classify every existing tool. **Retire the hardcoded `APPROVAL_REQUIRED` set** — `fs_read` becomes `local·reversible → auto`.
-- [ ] **Builder role + privilege separation.** Add the `builder` agent to `agents.json`; grant it the write capabilities; assert **no reviewer/orchestrator holds a write grant** (a test — this single assertion is the security model of self-modification). (§4.6)
-- [ ] **Group 1 read slice** (read-only, `auto`): `repo.read_file`, `repo.search`, `repo.run_tests`.
-- [ ] **Group 1 write slice** (Builder only, checkpoint-first): `git.create_branch`, `repo.apply_patch`, `git.stage`, `git.commit`. Writes confined to approved repo roots.
+- [ ] **P1 — Risk throttle.** `policy.py::risk_class(tool, args) -> (reversibility, externality)` + throttle table. Classify every existing tool. **Retire the hardcoded `APPROVAL_REQUIRED` set** — `fs_read` becomes `local·reversible → auto`. *(Built ahead of this: code writes are currently gated by allow-list + approved-roots + checkpoint-first; P1 formalises that into the matrix.)*
+- [x] **Builder role + privilege separation.** `builder` agent (kind `doer`, excluded from the council loop) holds the write grants; a test asserts **no reviewer/orchestrator holds any write grant** and that a reviewer write is denied at the broker. (§4.6)
+- [x] **Group 1 read slice** (read-only): `repo.read_file`, `repo.search`, `git.status`, `repo.run_tests`.
+- [x] **Group 1 write slice** (Builder only, checkpoint-first, confined to approved repo roots): `git.create_branch`, `repo.write_file`, `git.commit`. *(Substrate: local subprocess git/pytest, no external agent framework. `repo.apply_patch` deferred — `repo.write_file` covers creation for now.)*
 - [ ] **P2 — Council skeleton.** `council.py` with the four lenses as *deterministic* checks; wire into `broker._decide`; per-lens verdicts to audit.
 - [ ] **P3 — Aggregation + pending.** Any BLOCK → denied; any ESCALATE → existing pending path. `git.push` / external steps park for approval.
 - [ ] **P4 — Subtask contract.** `parent_id` child tasks + `SubtaskContract`; Orchestrator decomposes a self-improvement goal and spawns the Builder.

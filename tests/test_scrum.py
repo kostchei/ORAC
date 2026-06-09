@@ -16,13 +16,10 @@ from orac.tooling import RegularToolExecutor
 def test_orac_agents_are_loaded_from_prompt_registry() -> None:
     profiles = load_agent_profiles()
 
-    assert [profile.slug for profile in profiles] == [
-        "intent",
-        "optimiser",
-        "simples",
-        "efficiency",
-        "orchestrator",
-    ]
+    council = [profile.slug for profile in profiles if profile.kind == "council"]
+    assert council == ["intent", "optimiser", "simples", "efficiency", "orchestrator"]
+    assert "builder" in [profile.slug for profile in profiles]
+    assert next(p for p in profiles if p.slug == "builder").kind == "doer"
     assert all(profile.system_prompt for profile in profiles)
     assert all(profile.protocol_file.endswith(".json") for profile in profiles)
     assert set(profiles[0].tools).issubset(get_tool_map())

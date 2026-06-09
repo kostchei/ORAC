@@ -44,6 +44,16 @@
       "protocol_file": "orchestrator_reporter_max.json",
       "tools": ["task_reader", "status_reporter", "handoff_tracker"],
       "order": 50
+    },
+    {
+      "slug": "builder",
+      "name": "Builder",
+      "kind": "doer",
+      "purpose": "The only agent that writes the system's code. Builds on branches, checkpoint-first; the council plans and reviews but never writes.",
+      "prompt_file": "builder.md",
+      "protocol_file": "builder_build_max.json",
+      "tools": ["repo.read_file", "repo.search", "repo.write_file", "repo.run_tests", "git.create_branch", "git.commit", "git.status"],
+      "order": 60
     }
   ]
 }
