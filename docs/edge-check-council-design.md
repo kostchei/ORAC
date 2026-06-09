@@ -122,6 +122,32 @@ This makes Optimise the **utilisation governor of the whole system** — the thi
 daemon busy-but-not-overcommitted between tasks. The driver side belongs in `scrum.py`'s loop
 (it generates/pulls work), while the lens side lives in the council like the others.
 
+### 4.2.2 "60%" is a fair share of *available* capacity, across every resource
+
+The target is not a single metric. It is ~60% of **whatever the system has access to**, per
+resource dimension:
+
+- token / $ spend (already tracked by `model_policy.py` foundation cap)
+- CPU cycles, memory, GPU/VRAM, disk space, wall-clock time
+- any other measurable resource the host exposes
+
+Two properties define it:
+
+1. **Per-resource, not aggregate.** Each dimension has its own 60% band. Optimise should be
+   pushing work to fill *each* resource toward its share, and the binding constraint at any
+   moment is whichever dimension is tightest.
+2. **Against *available*, not total — and available is dynamic.** The denominator is
+   currently-free capacity, which **shrinks when external demand crunches the box** (the
+   machine gets used for other things). Optimise targets 60% of the *live headroom* and
+   **yields** as that headroom contracts: if another workload claims CPU/RAM/disk, ORAC's
+   absolute usage drops to stay at 60% of what remains, rather than fighting for the box.
+
+`resources.py::ResourceSnapshot` already measures most of this (`cpu_percent`,
+`memory_available_gb`, `vram_percent`, `disk_free_gb`, `busy`, `recommended_tier`), and
+`model_policy.py` already throttles model tier off it. So the driver reads the live snapshot
+each loop, computes per-resource headroom, and pulls/sheds work to track 60% of available — the
+infrastructure to measure "available" largely exists; what's new is the governor that acts on it.
+
 ### 4.3 Verdict aggregation
 
 Four reviewers, one decision. **Any blocker is a stop, not a vote to be averaged:**
@@ -250,11 +276,13 @@ reach a verdict; they just reach it as lenses).
    once real tools beyond `fs_read` exist.
 5. **Does the Orchestrator itself pass through the council?** Decomposition is an edge too
    (`dispatch`). Proposal: yes — Intent/Simple/Optimise review the *plan* before subagents spawn.
-6. **Where does Optimise's driver side live, and what does "60% utilisation" measure?** The
-   generative "never idle" role (§4.2.1) is a loop concern in `scrum.py`, separate from the lens.
-   Open: is 60% measured against compute/$ budget (`model_policy.py` already tracks foundation
-   spend), wall-clock busy time, or task throughput? The metric decides what "idle" and "over"
-   mean for both the driver and the lens veto.
+6. **Where does Optimise's driver side live?** The generative "never idle" role (§4.2.1) is a
+   loop concern in `scrum.py`, separate from the lens. (What 60% *measures* is settled in
+   §4.2.2: a per-resource fair share of dynamically-available capacity, read from
+   `resources.py::ResourceSnapshot`.) Remaining open sub-questions: the band tolerance (how far
+   off 60% before the driver acts or the lens vetoes), the control loop's reaction speed
+   (avoid thrash as external load oscillates), and how the driver *generates* fillable work when
+   the backlog is empty but headroom exists.
 
 ## 9. One-line summary
 
