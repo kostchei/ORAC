@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from orac.agents import RuntimeAgent, build_core_agents
+from orac.broker import ToolBroker
+from orac.broker_store import BrokerStore
 from orac.llm import Brain
 from orac.models import Board, Task, TaskStatus
 
@@ -17,10 +20,15 @@ class ScrumRunResult:
 @dataclass
 class Scrum:
     brain: Brain
+    root: Path | str | None = None
     agents: list[RuntimeAgent] = field(init=False)
 
     def __post_init__(self) -> None:
-        self.agents = build_core_agents(self.brain)
+        broker = None
+        if self.root is not None:
+            store = BrokerStore(self.root).init()
+            broker = ToolBroker.from_store(store)
+        self.agents = build_core_agents(self.brain, broker)
 
     def plan_sprint(self, board: Board, capacity: int) -> list[Task]:
         planned: list[Task] = []

@@ -148,7 +148,9 @@ class RuntimeAgent:
         return True
 
 
-def build_core_agents(brain: Brain) -> list[RuntimeAgent]:
+def build_core_agents(
+    brain: Brain, broker: ToolBroker | None = None
+) -> list[RuntimeAgent]:
     profiles = load_agent_profiles()
-    broker = ToolBroker.from_manifests()
+    broker = broker or ToolBroker.from_manifests()
     return [RuntimeAgent(profile=profile, brain=brain, broker=broker) for profile in profiles]

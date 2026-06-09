@@ -392,7 +392,7 @@ def cmd_scrum_run(store: BoardStore, args: argparse.Namespace) -> int:
         decision = None
         brain_name = args.brain
         model = None
-    scrum = Scrum(build_brain(brain_name, model=model))
+    scrum = Scrum(build_brain(brain_name, model=model), root=store.root)
     result = scrum.run(board, cycles=args.cycles)
     store.save(board)
     if decision and decision.brain == "foundation" and result.touched_tasks:

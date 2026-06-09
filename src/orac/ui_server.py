@@ -73,9 +73,10 @@ class UIRuntime:
                 policy = policy_store.load_policy()
                 decision = policy_store.decide()
                 board = self.store.load()
-                result = Scrum(build_brain(decision.brain, model=decision.model)).run(
-                    board, cycles=int(policy["daemon_cycles"])
-                )
+                result = Scrum(
+                    build_brain(decision.brain, model=decision.model),
+                    root=self.store.root,
+                ).run(board, cycles=int(policy["daemon_cycles"]))
                 self.store.save(board)
                 if decision.brain == "foundation" and result.touched_tasks:
                     policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
@@ -145,9 +146,9 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                 policy_store = ModelPolicyStore(store)
                 decision = policy_store.decide()
                 board = store.load()
-                result = Scrum(build_brain(decision.brain, model=decision.model)).run(
-                    board, cycles=cycles
-                )
+                result = Scrum(
+                    build_brain(decision.brain, model=decision.model), root=store.root
+                ).run(board, cycles=cycles)
                 store.save(board)
                 if decision.brain == "foundation" and result.touched_tasks:
                     policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())

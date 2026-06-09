@@ -37,7 +37,9 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
     policy_store = ModelPolicyStore(store)
     decision = policy_store.decide()
     board = store.load()
-    result = Scrum(build_brain(decision.brain, model=decision.model)).run(board, cycles=cycles)
+    result = Scrum(
+        build_brain(decision.brain, model=decision.model), root=store.root
+    ).run(board, cycles=cycles)
     store.save(board)
     if decision.brain == "foundation" and result.touched_tasks:
         policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
