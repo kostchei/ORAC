@@ -31,7 +31,7 @@ comes first and groups 2–5 defer behind it. This doc is the master ordering; t
 
 Ordered; each step keeps the suite green.
 
-- [ ] **P0 — Types.** `EdgeKind`, `LensDecision`, `ReviewContext`, `LensVerdict`, `CouncilVerdict` (`models.py`). No behaviour.
+- [x] **P0 — Types.** `EdgeKind`, `LensDecision`, `ReviewContext`, `LensVerdict`, `CouncilVerdict` (+ risk vocabulary `Reversibility`/`Externality`/`RiskClass`) in `models.py`. No behaviour.
 - [ ] **P1 — Risk throttle.** `policy.py::risk_class(tool, args) -> (reversibility, externality)` + throttle table. Classify every existing tool. **Retire the hardcoded `APPROVAL_REQUIRED` set** — `fs_read` becomes `local·reversible → auto`.
 - [ ] **Builder role + privilege separation.** Add the `builder` agent to `agents.json`; grant it the write capabilities; assert **no reviewer/orchestrator holds a write grant** (a test — this single assertion is the security model of self-modification). (§4.6)
 - [ ] **Group 1 read slice** (read-only, `auto`): `repo.read_file`, `repo.search`, `repo.run_tests`.

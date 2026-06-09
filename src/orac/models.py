@@ -174,3 +174,91 @@ class Board:
             created_at=str(data.get("created_at") or now_iso()),
             updated_at=str(data.get("updated_at") or now_iso()),
         )
+
+
+# --- Edge-check council contracts (P0) --------------------------------------
+#
+# Pure data contracts for the edge-check council (see
+# docs/edge-check-council-design.md). P0 defines the vocabulary only — no
+# behaviour. The classification logic that *produces* a RiskClass and the
+# council that *produces* a CouncilVerdict arrive in P1/P2.
+
+
+class EdgeKind(StrEnum):
+    """A boundary crossing the broker mediates (design §4.1)."""
+
+    DISPATCH = "dispatch"        # orchestrator -> subagent
+    TOOL_CALL = "tool_call"      # subagent -> tool/adapter
+    TOOL_CHAIN = "tool_chain"    # tool -> tool (output feeds the next)
+    RETURN = "return"            # subagent -> parent (result roll-up)
+
+
+class LensDecision(StrEnum):
+    """One reviewer's call on an edge (design §4.3)."""
+
+    PASS = "pass"            # no objection
+    BLOCK = "block"          # hard veto -> denied
+    ESCALATE = "escalate"    # needs human / higher council -> pending
+
+
+class Reversibility(StrEnum):
+    """First risk axis (design §4.4)."""
+
+    REVERSIBLE = "reversible"
+    HARD = "hard"                # hard-to-reverse
+    IRREVERSIBLE = "irreversible"
+
+
+class Externality(StrEnum):
+    """Second risk axis (design §4.4)."""
+
+    LOCAL = "local"
+    EXTERNAL_PRIVATE = "external_private"
+    EXTERNAL_PUBLIC = "external_public"
+    FINANCIAL = "financial"
+    PHYSICAL = "physical"
+
+
+@dataclass(frozen=True)
+class RiskClass:
+    """The (reversibility x externality) pair an edge carries.
+
+    P0 defines the type; ``policy.py::risk_class`` (P1) classifies a request into
+    one and the throttle table derives the approval requirement from it.
+    """
+
+    reversibility: Reversibility
+    externality: Externality
+
+
+@dataclass(frozen=True)
+class ReviewContext:
+    """Everything a lens needs to judge one edge (design §5)."""
+
+    edge: EdgeKind
+    request: CapabilityRequest
+    task: Task
+    risk: RiskClass
+
+
+@dataclass(frozen=True)
+class LensVerdict:
+    """One lens's verdict on a ReviewContext."""
+
+    lens: str                # "Intent" | "Optimise" | "Simple" | "Efficiency"
+    decision: LensDecision
+    reason: str
+
+
+@dataclass(frozen=True)
+class CouncilVerdict:
+    """The aggregated council decision the broker turns into a CapabilityResult.
+
+    Aggregation rule (design §4.3): any BLOCK -> denied; else any ESCALATE ->
+    pending; else allowed. The per-lens verdicts are retained so every block is
+    explainable in the audit log.
+    """
+
+    status: CapabilityStatus
+    lenses: tuple[LensVerdict, ...]
+    reason: str
