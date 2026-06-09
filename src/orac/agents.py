@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from orac.agent_registry import AgentProfile, load_agent_profiles
+from orac.broker import ToolBroker
 from orac.intent_backbone import IntentBackbone
 from orac.llm import Brain
-from orac.models import Task, TaskStatus
-from orac.tooling import RegularToolExecutor
+from orac.models import (
+    CapabilityRequest,
+    CapabilityResult,
+    CapabilityStatus,
+    Task,
+    TaskStatus,
+)
 
 
 @dataclass
 class RuntimeAgent:
     profile: AgentProfile
     brain: Brain
-    tools: RegularToolExecutor
+    broker: ToolBroker
 
     @property
     def name(self) -> str:
@@ -30,6 +37,23 @@ class RuntimeAgent:
             return
         prompt = self._task_prompt(task, before)
         task.add_log(self.name, self.brain.think(self.name, self.role, task, prompt))
+
+    def _use(self, task: Task, tool: str, **args: Any) -> CapabilityResult:
+        """Route one tool call through the broker.
+
+        The deterministic flow relies on each grant being in place, so a denied
+        or errored capability is a wiring bug, not a soft path — fail loud.
+        """
+        result = self.broker.request(
+            CapabilityRequest(agent=self.name, tool=tool, task_id=task.id, args=args),
+            task,
+        )
+        if result.status is not CapabilityStatus.ALLOWED:
+            raise RuntimeError(
+                f"{self.name} could not use {tool!r}: "
+                f"{result.status.value} - {result.message}"
+            )
+        return result
 
     def _task_prompt(self, task: Task, previous_status: TaskStatus) -> str:
         tools = ", ".join(self.profile.tools)
@@ -62,17 +86,15 @@ class RuntimeAgent:
     def _budget_resources(self, task: Task) -> bool:
         if task.status != TaskStatus.READY:
             return False
-        self.tools.run(
-            "resource_budgeter",
+        self._use(
             task,
-            self.name,
+            "resource_budgeter",
             resource_type="available effort",
             budget_limit="60%",
         )
-        self.tools.run(
-            "handoff_tracker",
+        self._use(
             task,
-            self.name,
+            "handoff_tracker",
             next_owner="Simples",
             reason="ready work should follow the smallest effective path",
         )
@@ -80,19 +102,17 @@ class RuntimeAgent:
 
     def _advance_simple_path(self, task: Task) -> bool:
         if task.status == TaskStatus.READY:
-            self.tools.run(
-                "minimal_path_planner",
+            self._use(
                 task,
-                self.name,
+                "minimal_path_planner",
                 candidate_steps=["clarify", "budget", "implement", "review"],
             )
             task.transition(TaskStatus.IN_PROGRESS)
             return True
         if task.status == TaskStatus.IN_PROGRESS:
-            self.tools.run(
-                "implementation_log",
+            self._use(
                 task,
-                self.name,
+                "implementation_log",
                 change_summary="advanced the task to review using the current minimal path",
             )
             task.transition(TaskStatus.REVIEW)
@@ -106,17 +126,15 @@ class RuntimeAgent:
             task.add_log(self.name, "Blocked: no acceptance criteria available for review.")
             task.transition(TaskStatus.BLOCKED)
             return True
-        self.tools.run("waste_scanner", task, self.name, scope="task outcome")
-        self.tools.run(
-            "design_replay",
+        self._use(task, "waste_scanner", scope="task outcome")
+        self._use(
             task,
-            self.name,
+            "design_replay",
             current_design="current task flow remains small enough to keep",
         )
-        self.tools.run(
-            "verification_log",
+        self._use(
             task,
-            self.name,
+            "verification_log",
             checks=list(task.acceptance_criteria),
             result="passed",
         )
@@ -126,11 +144,11 @@ class RuntimeAgent:
     def _report_to_main_task(self, task: Task) -> bool:
         if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED}:
             return False
-        self.tools.run("status_reporter", task, self.name)
+        self._use(task, "status_reporter")
         return True
 
 
 def build_core_agents(brain: Brain) -> list[RuntimeAgent]:
     profiles = load_agent_profiles()
-    executor = RegularToolExecutor()
-    return [RuntimeAgent(profile=profile, brain=brain, tools=executor) for profile in profiles]
+    broker = ToolBroker.from_manifests()
+    return [RuntimeAgent(profile=profile, brain=brain, broker=broker) for profile in profiles]

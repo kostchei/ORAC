@@ -21,6 +21,43 @@ class TaskStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class CapabilityStatus(StrEnum):
+    ALLOWED = "allowed"
+    DENIED = "denied"
+    PENDING = "pending"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class CapabilityRequest:
+    """A structured request from an agent to use one tool.
+
+    This is the single shape every tool call must take once routed through the
+    broker. Agents name the capability and supply arguments; they never reach a
+    handler directly.
+    """
+
+    agent: str
+    tool: str
+    task_id: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CapabilityResult:
+    """The broker's verdict on a CapabilityRequest.
+
+    ``status`` is the stable agent-facing contract: an agent must handle all four
+    of allowed / denied / pending / error. ``data`` carries the handler payload on
+    success and is empty otherwise.
+    """
+
+    status: CapabilityStatus
+    tool: str
+    message: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class WorkLog:
     agent: str

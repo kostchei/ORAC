@@ -15,7 +15,7 @@
       "purpose": "Allocate resources and aim to spend up to 60% of available resources in any situation.",
       "prompt_file": "optimiser.md",
       "protocol_file": "optimiser_resource_max.json",
-      "tools": ["resource_budgeter", "capacity_checker", "risk_register"],
+      "tools": ["resource_budgeter", "capacity_checker", "risk_register", "handoff_tracker"],
       "order": 20
     },
     {
