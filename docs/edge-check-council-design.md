@@ -148,6 +148,28 @@ Two properties define it:
 each loop, computes per-resource headroom, and pulls/sheds work to track 60% of available — the
 infrastructure to measure "available" largely exists; what's new is the governor that acts on it.
 
+### 4.2.3 The idle default: ORAC works on ORAC
+
+When the board is empty and headroom exists, the driver does **not** invent arbitrary work.
+The standing backlog is **self-improvement**: with no external query, ORAC investigates its own
+system, reviews its own code, and works to test, secure, and harden itself. That is the default
+intent, so it does not read as goal-drift to the Intent lens — self-improvement *is* the goal in
+the absence of another.
+
+Two consequences fall out of this:
+
+1. **ORAC dogfoods its own broker.** Self-edits are ordinary tool calls (`write_code`,
+   `run_tests`, `git_commit`, …) routed through the same broker + council. Self-modification is
+   made reversible by **checkpoint-first** (work on a branch / commit before changing files), so
+   under the risk model it is `auto + notify`, not blocked — while `git_push`, releases, or any
+   external/irreversible step still gates. The safety model that governs external action governs
+   self-modification too; there is no privileged self-edit path.
+2. **"Never idle" must not become "always thrashing."** Filling the 60% band with self-work is
+   only useful if the work is real. Simple's rebuild-or-keep test and Intent's goal check are
+   the brakes: they veto churning a working subsystem just to look busy. Optimise wants the
+   capacity used; Simple/Intent ensure it is used on something worth doing. That tension is
+   intended, not a bug.
+
 ### 4.3 Verdict aggregation
 
 Four reviewers, one decision. **Any blocker is a stop, not a vote to be averaged:**
@@ -278,11 +300,15 @@ reach a verdict; they just reach it as lenses).
    (`dispatch`). Proposal: yes — Intent/Simple/Optimise review the *plan* before subagents spawn.
 6. **Where does Optimise's driver side live?** The generative "never idle" role (§4.2.1) is a
    loop concern in `scrum.py`, separate from the lens. (What 60% *measures* is settled in
-   §4.2.2: a per-resource fair share of dynamically-available capacity, read from
-   `resources.py::ResourceSnapshot`.) Remaining open sub-questions: the band tolerance (how far
-   off 60% before the driver acts or the lens vetoes), the control loop's reaction speed
-   (avoid thrash as external load oscillates), and how the driver *generates* fillable work when
-   the backlog is empty but headroom exists.
+   §4.2.2; what fills idle capacity is settled in §4.2.3: self-improvement.) Remaining open
+   sub-questions: the band tolerance (how far off 60% before the driver acts or the lens vetoes)
+   and the control loop's reaction speed (avoid thrash as external load oscillates).
+7. **Self-modification of safety-critical files needs a higher gate.** §4.2.3 lets idle ORAC
+   edit its own code under `auto + notify` (reversible via checkpoint). But edits to the files
+   that *enforce* the safety model — `broker.py`, `policy.py`, the council, the loop — are a
+   different class: the system rewriting its own governor. Proposal: changes touching those
+   paths escalate to `pending` (human) and must pass the existing suite before merge, regardless
+   of reversibility. A feedback loop that can weaken its own brakes should not be `auto`.
 
 ## 9. One-line summary
 
