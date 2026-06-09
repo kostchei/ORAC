@@ -49,8 +49,8 @@ Subagent (doer, isolated context)
    ▼
 ToolBroker  ── edge ──►  Council (risk-throttled)
    │                        ├─ Intent   (goal drift?)
-   │                        ├─ Optimise (over budget?)
-   │                        ├─ Simple   (over-scope?)
+   │                        ├─ Optimise (fair share — near 60%, never idle?)
+   │                        ├─ Simple   (rebuild-or-keep given current shape?)
    │                        └─ Efficiency (redundant/wasteful?)
    │   verdict = aggregate(lenses)        ▲
    ├─ allowed  → dispatch (adapter / executor)
@@ -89,13 +89,38 @@ One reviewer. A lens receives a `ReviewContext` and returns a `LensVerdict`. The
 | Lens | Question | Veto when |
 | --- | --- | --- |
 | **Intent** | Does this still serve the locked goal? | action diverges from acceptance criteria |
-| **Optimise** | Within budget / the 60% target? | projected spend exceeds budget |
-| **Simple** | Minimal path, or over-building? | cheaper/smaller route exists |
+| **Optimise** | Are we using our fair share — near 60%, never idle, never over? | utilisation drifts off the band (idle **or** overspend) |
+| **Simple** | If we rebuilt this now, given its current patched shape, would we build it this way or differently? | a from-scratch rebuild beats continuing to patch |
 | **Efficiency** | Duplicates or wastes existing work? | result already exists / is dead work |
 
 A lens is an interface, not necessarily an LLM call. Cheap lenses can be deterministic
 (e.g. Optimise reads the rate counters); expensive lenses escalate to the model only when the
 risk class warrants it.
+
+Two of these have non-obvious impetus, easy to mischaracterise:
+
+- **Optimise is a two-sided utilisation governor, not a cost cap.** Its impetus is to use a
+  *fair share* of resources 24/7 — never too much, but **never idle**. The target is to keep
+  utilisation near 60% continuously. So it vetoes overspend *and* flags idleness; on an edge it
+  asks "is this a fair use?", but it also has a generative side (§4.2.1).
+- **Simple is the rebuild-or-keep test, not just "fewest steps."** It asks: given what we know
+  now and the thing's *current accreted shape (with all its patches)*, would we build it this
+  way or differently? It vetoes when a from-scratch rebuild would beat continuing to patch.
+  This is distinct from Efficiency, which hunts local waste rather than judging the whole shape.
+
+### 4.2.1 Optimise has a second, generative role
+
+A pure edge-check council is **reactive** — it reviews proposed actions. But Optimise's "never
+idle" impetus is **proactive**: when the board is under-utilised it should *initiate* work to
+fill the 60% band, not wait to be asked. So Optimise is dual:
+
+1. **As a lens** (reactive): on an edge, "is this a fair use of our share — not wasteful?"
+2. **As a driver** (proactive): in the 24/7 loop, "are we idle / below the band? then pull or
+   spawn more work toward 60%." This is a loop-level role, not an edge review.
+
+This makes Optimise the **utilisation governor of the whole system** — the thing that keeps the
+daemon busy-but-not-overcommitted between tasks. The driver side belongs in `scrum.py`'s loop
+(it generates/pulls work), while the lens side lives in the council like the others.
 
 ### 4.3 Verdict aggregation
 
@@ -225,6 +250,11 @@ reach a verdict; they just reach it as lenses).
    once real tools beyond `fs_read` exist.
 5. **Does the Orchestrator itself pass through the council?** Decomposition is an edge too
    (`dispatch`). Proposal: yes — Intent/Simple/Optimise review the *plan* before subagents spawn.
+6. **Where does Optimise's driver side live, and what does "60% utilisation" measure?** The
+   generative "never idle" role (§4.2.1) is a loop concern in `scrum.py`, separate from the lens.
+   Open: is 60% measured against compute/$ budget (`model_policy.py` already tracks foundation
+   spend), wall-clock busy time, or task throughput? The metric decides what "idle" and "over"
+   mean for both the driver and the lens veto.
 
 ## 9. One-line summary
 
