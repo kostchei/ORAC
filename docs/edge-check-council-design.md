@@ -41,13 +41,13 @@ as the lenses of that review.
 ## 3. Target architecture
 
 ```
-Orchestrator
+Orchestrator (plans, spawns — cannot write)
    │  decompose → spawn
    ▼
-Subagent (doer, isolated context)
+Builder subagent (the ONLY agent granted code-write; isolated context)
    │  emits CapabilityRequest
    ▼
-ToolBroker  ── edge ──►  Council (risk-throttled)
+ToolBroker  ── edge ──►  Council (risk-throttled; plan/review/approve — cannot write)
    │                        ├─ Intent   (goal drift?)
    │                        ├─ Optimise (fair share — near 60%, never idle?)
    │                        ├─ Simple   (rebuild-or-keep given current shape?)
@@ -62,7 +62,10 @@ ToolBroker  ── edge ──►  Council (risk-throttled)
 Separation of responsibilities:
 
 - **Broker = plumbing.** Chokepoint, dispatch, audit, pending queue. Mechanism, no judgment.
-- **Council = policy.** The deliberative judgment that turns a request into a verdict.
+- **Council = policy.** The deliberative judgment that turns a request into a verdict. It
+  plans, documents, discusses, and approves or rejects — **it does not write.**
+- **Builder = the only writer.** A dedicated doer subagent is the sole holder of mutating code
+  grants. See §4.6 — this is the load-bearing separation of the whole design.
 - **Risk model = throttle.** Decides *how much* council an edge convenes (and whether a human
   is also required). This is the home for the two-axis (reversibility × externality) model.
 
@@ -158,10 +161,12 @@ the absence of another.
 
 Two consequences fall out of this:
 
-1. **ORAC dogfoods its own broker.** Self-edits are ordinary tool calls (`write_code`,
-   `run_tests`, `git_commit`, …) routed through the same broker + council. Self-modification is
-   made reversible by **checkpoint-first** (work on a branch / commit before changing files), so
-   under the risk model it is `auto + notify`, not blocked — while `git_push`, releases, or any
+1. **ORAC dogfoods its own broker, and only the Builder writes.** Self-edits are ordinary tool
+   calls (`write_code`, `run_tests`, `git_commit`, …) routed through the same broker + council,
+   and issued by the **Builder** subagent alone (§4.6) — the council plans the self-improvement
+   and reviews the diff but never writes it. Self-modification is made reversible by
+   **checkpoint-first** (Builder works on a branch / commits before changing files), so under
+   the risk model it is `auto + notify`, not blocked — while `git_push`, releases, or any
    external/irreversible step still gates. The safety model that governs external action governs
    self-modification too; there is no privileged self-edit path.
 2. **"Never idle" must not become "always thrashing."** Filling the 60% band with self-work is
@@ -215,6 +220,34 @@ that accompanies the task, but it is **enforced at the edge, not trusted**:
 Subtasks are modelled as child `Task`s on the existing `Board` with a `parent_id`, so the
 council and broker apply unchanged at any depth.
 
+### 4.6 Separation of writer and reviewer: only the builder builds
+
+**The agent that writes the system's code is never an agent that reviews, plans, or approves.**
+
+- A dedicated **Builder** subagent is the *sole* holder of mutating code grants
+  (`write_code`, `git_commit`, file writes). It does not plan, judge, or approve — it builds.
+- The **Orchestrator** plans and spawns; the **Council** (Intent/Optimise/Simple/Efficiency)
+  plans, documents, discusses, persuades, and **approves or rejects**. None of them hold a
+  write grant. They can shape *what* gets built and veto it — they cannot put hands on the code.
+
+This is not a convention to be followed faithfully; **it is the grant boundary the broker
+already enforces.** The Builder's allow-list contains the write capabilities; the council's and
+orchestrator's do not. A council agent that emitted `write_code` would be `denied` at the broker
+like any ungranted call — the same mechanism that denied Optimiser `handoff_tracker` before it
+was granted. Separation of privilege costs nothing extra; it is one row in the `grants` table
+per agent.
+
+The flow for any change, including self-improvement:
+
+```
+Council/Orchestrator: plan + decide WHAT  →  Builder: write it (checkpoint-first, on a branch)
+                                          →  return edge: Council reviews the diff  →  approve/merge
+```
+
+The Builder is checked by the others, but alone among them it can build. This also gives a
+free property: **a single writer means no two agents race to edit the same files** — code
+mutation is serialised through one principal.
+
 ## 5. Data contracts (new types)
 
 ```python
@@ -263,6 +296,7 @@ written to the audit log so every block is explainable and reversible.
 | Persist per-lens verdicts | `broker_store.py` | extend `audit` (or a `reviews` table) |
 | Subtask contract + child tasks | `models.py`, `agents.py` | `parent_id`, `SubtaskContract` in metadata; Orchestrator spawns |
 | Loop runs Orchestrator+subagents, not fixed 4-in-sequence | `scrum.py` | the four stop being a sequence; they are invoked as lenses by the broker |
+| Add **Builder** agent + write grants; ensure council/orchestrator have **none** | `prompts/agents.json`, grants seed | §4.6 — Builder alone holds `write_code`/`git_commit`; verified by a test that asserts no reviewer holds a write grant |
 
 The allow-list does **not** go away — it remains the cheapest lens (capability granted at
 all?) and runs first. The council is what we add *above* it for consequential edges.
@@ -305,10 +339,12 @@ reach a verdict; they just reach it as lenses).
    and the control loop's reaction speed (avoid thrash as external load oscillates).
 7. **Self-modification of safety-critical files needs a higher gate.** §4.2.3 lets idle ORAC
    edit its own code under `auto + notify` (reversible via checkpoint). But edits to the files
-   that *enforce* the safety model — `broker.py`, `policy.py`, the council, the loop — are a
-   different class: the system rewriting its own governor. Proposal: changes touching those
-   paths escalate to `pending` (human) and must pass the existing suite before merge, regardless
-   of reversibility. A feedback loop that can weaken its own brakes should not be `auto`.
+   that *enforce* the safety model — `broker.py`, `policy.py`, the council, the loop, and
+   **the grant seed that defines who-can-write (§4.6)** — are a different class: the system
+   rewriting its own governor or its own privilege boundary. Proposal: changes the Builder makes
+   touching those paths escalate to `pending` (human) and must pass the existing suite before
+   merge, regardless of reversibility. A feedback loop that can weaken its own brakes — or grant
+   itself new powers — should not be `auto`.
 
 ## 9. One-line summary
 
