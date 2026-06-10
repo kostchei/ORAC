@@ -53,6 +53,54 @@ otherwise the task stays blocked rather than burning a second local attempt.
 Foundation spend remains governed by the existing daily cap
 (`daily_foundation_budget_usd × foundation_daily_fraction`) in `model_policy.py`.
 
+## Browser foundation (no API key)
+
+When you don't have or want an API key, set `ORAC_BROWSER_FOUNDATION=claude`
+(or `gemini` or `openai`) before starting the daemon.  ORAC connects to an
+already-running Chrome/Edge instance via the Chrome DevTools Protocol, opens a
+new tab to the provider's chat UI, types the prompt, waits for the response to
+stabilise, and reads the text back.
+
+**One-time setup**
+
+```
+# 1. Install playwright (no browser download needed — uses your Chrome)
+pip install playwright
+
+# 2. Start Chrome with the debugging port open
+chrome --remote-debugging-port=9222 --no-first-run
+
+# 3. Log into claude.ai / gemini.google.com / chatgpt.com in that browser
+
+# 4. Tell ORAC to use it
+$env:ORAC_BROWSER_FOUNDATION = "claude"   # PowerShell
+export ORAC_BROWSER_FOUNDATION=claude     # bash/zsh
+```
+
+Or set `browser_foundation_provider` in `.orac/config.json → model_policy`.
+
+**Routing behaviour**
+
+Browser foundation is used exactly where the API-key path would be used:
+origination, decomposition, and escalated sessions.  When both an API key *and*
+browser foundation are configured, the API key wins (controlled spend).  All the
+same daily-cap and escalation logic applies; browser calls aren't tracked by cost
+(they're free) so `can_escalate` returns `True` unconditionally in browser mode.
+
+**Reliability notes**
+
+- Chat UIs enforce rate limits.  Don't set `daemon_interval_seconds` below 60.
+- The CSS selectors in `browser_brain.py` will break when providers redesign
+  their UIs.  Update `_INPUT_SELECTORS` / `_RESPONSE_SELECTORS` if a call
+  returns empty or wrong text.
+- For `think_json` calls, the schema is included as plain-text instructions in
+  the prompt.  Server-side token enforcement is unavailable.  `parse_decision`
+  in AgentSession still rejects malformed replies, so failures are visible rather
+  than silent.
+- The brain blocks the daemon thread while the browser tab is open.  120 s
+  default timeout is generous; reduce `timeout_seconds` if you want faster
+  failure on a hung provider.
+
 ## Model swapping discipline
 
 16 GB holds one of the above at a time, so kind-switches mean an LM Studio load

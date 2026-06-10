@@ -212,6 +212,15 @@ def build_brain(name: str, model: str | None = None) -> Brain:
             primary=foundation,
             fallback=FallbackBrain(primary=LMStudioBrain(), fallback=RulesBrain()),
         )
+    if name == "browser":
+        from orac.browser_brain import BrowserFoundationBrain  # noqa: PLC0415
+
+        provider = model if model and model not in {"browser", ""} else None
+        brain = BrowserFoundationBrain(**({"provider": provider} if provider else {}))
+        return FallbackBrain(
+            primary=brain,
+            fallback=FallbackBrain(primary=LMStudioBrain(), fallback=RulesBrain()),
+        )
     raise ValueError(
-        f"Unknown brain {name!r}. Expected 'rules', 'ollama', 'lmstudio', or 'foundation'."
+        f"Unknown brain {name!r}. Expected 'rules', 'ollama', 'lmstudio', 'foundation', or 'browser'."
     )

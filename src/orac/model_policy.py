@@ -31,6 +31,12 @@ DEFAULT_POLICY = {
     "lmstudio_autoload_on_start": True,
     "daemon_interval_seconds": 60,
     "daemon_cycles": 1,
+    # Browser foundation (docs/model-selection.md §browser).
+    # Empty string = disabled. Set to "claude", "gemini", or "openai" to route
+    # foundation calls through the provider's chat UI instead of an API key.
+    # Chrome must be running with --remote-debugging-port=9222.
+    "browser_foundation_provider": "",
+    "browser_cdp_url": "http://localhost:9222",
 }
 
 # Local-vs-foundation routing by call site (docs/model-selection.md): foundation
@@ -127,6 +133,17 @@ class ModelPolicyStore:
                 foundation_remaining_today_usd=remaining,
                 resources=resources,
             )
+        provider = _browser_provider(policy)
+        if provider:
+            return ModelDecision(
+                brain="browser",
+                model=provider,
+                reason=f"browser foundation active (provider={provider}; no API key required)",
+                daily_foundation_cap_usd=daily_cap,
+                foundation_spent_today_usd=spent,
+                foundation_remaining_today_usd=remaining,
+                resources=resources,
+            )
         model = str(policy.get("lmstudio_standard_model") or "local")
         return ModelDecision(
             brain="lmstudio",
@@ -155,7 +172,12 @@ def model_for_work_kind(policy: dict[str, Any], work_kind: str | None) -> str:
 
 
 def can_escalate(policy_store: "ModelPolicyStore") -> bool:
-    """Escalation to foundation requires a key and remaining daily budget."""
+    """Escalation to foundation requires either:
+    - an API key with remaining daily budget, or
+    - browser foundation configured (no cost tracking).
+    """
+    if _has_browser_foundation(policy_store.load_policy()):
+        return True
     if not _has_foundation_key():
         return False
     policy = policy_store.load_policy()
@@ -171,12 +193,16 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
     """The brain for a doer session (docs/model-selection.md routing).
 
     Escalated tasks (a local session already failed on them) get the foundation
-    brain; everything else runs locally on the work kind's model slot. Callers
-    must check :func:`can_escalate` before marking a task escalated.
+    brain (API or browser); everything else runs locally on the work kind's model
+    slot. Callers must check :func:`can_escalate` before marking a task escalated.
     """
     from orac.llm import build_brain
 
     if task.metadata.get("escalated"):
+        policy = policy_store.load_policy()
+        provider = _browser_provider(policy)
+        if provider:
+            return build_brain("browser", model=provider)
         return build_brain("foundation")
     policy = policy_store.load_policy()
     return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
@@ -187,9 +213,22 @@ def _today_key() -> str:
 
 
 def _has_foundation_key() -> bool:
-    import os
-
     return bool(os.environ.get("ORAC_FOUNDATION_API_KEY"))
+
+
+def _browser_provider(policy: dict[str, Any]) -> str:
+    """Return the browser foundation provider name, or '' if disabled.
+
+    Resolution order: ORAC_BROWSER_FOUNDATION env var → policy key.
+    """
+    env = os.environ.get("ORAC_BROWSER_FOUNDATION", "")
+    if env:
+        return env
+    return str(policy.get("browser_foundation_provider", ""))
+
+
+def _has_browser_foundation(policy: dict[str, Any]) -> bool:
+    return bool(_browser_provider(policy))
 
 
 def _coerce_policy(policy: dict[str, Any]) -> dict[str, Any]:
@@ -211,6 +250,8 @@ def _coerce_policy(policy: dict[str, Any]) -> dict[str, Any]:
         "lmstudio_code_model",
         "lmstudio_creative_model",
         "lmstudio_identifier",
+        "browser_foundation_provider",
+        "browser_cdp_url",
     ]:
         policy[key] = str(policy.get(key, ""))
     policy["lmstudio_autoload_on_start"] = bool(policy.get("lmstudio_autoload_on_start", True))
