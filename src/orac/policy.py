@@ -59,6 +59,8 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "git.commit": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     # Pushing publishes to a remote others may pull from: hard to reverse, external.
     "git.push": RiskClass(Reversibility.HARD, Externality.EXTERNAL_PRIVATE),
+    # Revert creates a new commit undoing a previous one: the rollback primitive.
+    "git.revert": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
 }
 
 
@@ -81,9 +83,13 @@ def risk_class(tool: str, args: dict[str, Any] | None = None) -> RiskClass:
 
 
 # The throttle table: every (reversibility x externality) pair maps to a mode.
-# Fully enumerated on purpose — no computed fallback. To make `git.push` notify
-# instead of gate (the "push is fine, only comms ask" preference), change the
-# single cell (HARD, EXTERNAL_PRIVATE) from APPROVE to NOTIFY.
+# Fully enumerated on purpose — no computed fallback.
+#
+# Review-after, not ask-before (user policy): code work must never block the
+# loop. Checkpoint-first writes, commits, and pushes run unattended and land in
+# the review queue ("I did X, here is the working result — ok? rollback
+# available"). APPROVE is reserved for the genuinely irreversible/external:
+# communications, financial, physical.
 _THROTTLE: dict[tuple[Reversibility, Externality], ApprovalMode] = {
     (Reversibility.REVERSIBLE, Externality.LOCAL): ApprovalMode.AUTO,
     (Reversibility.REVERSIBLE, Externality.EXTERNAL_PRIVATE): ApprovalMode.NOTIFY,
@@ -91,7 +97,7 @@ _THROTTLE: dict[tuple[Reversibility, Externality], ApprovalMode] = {
     (Reversibility.REVERSIBLE, Externality.FINANCIAL): ApprovalMode.APPROVE,
     (Reversibility.REVERSIBLE, Externality.PHYSICAL): ApprovalMode.NOTIFY,
     (Reversibility.HARD, Externality.LOCAL): ApprovalMode.NOTIFY,
-    (Reversibility.HARD, Externality.EXTERNAL_PRIVATE): ApprovalMode.APPROVE,
+    (Reversibility.HARD, Externality.EXTERNAL_PRIVATE): ApprovalMode.NOTIFY,
     (Reversibility.HARD, Externality.EXTERNAL_PUBLIC): ApprovalMode.APPROVE,
     (Reversibility.HARD, Externality.FINANCIAL): ApprovalMode.APPROVE,
     (Reversibility.HARD, Externality.PHYSICAL): ApprovalMode.APPROVE,

@@ -16,7 +16,7 @@ from orac.tooling import ToolResult
 
 READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status"})
 WRITE_TOOLS = frozenset(
-    {"repo.write_file", "git.create_branch", "git.commit", "git.push"}
+    {"repo.write_file", "git.create_branch", "git.commit", "git.push", "git.revert"}
 )
 TEST_TOOLS = frozenset({"repo.run_tests"})
 CODE_TOOLS = READ_TOOLS | WRITE_TOOLS | TEST_TOOLS
@@ -43,6 +43,7 @@ class CodeAdapterSet:
             "git.create_branch": self.create_branch,
             "git.commit": self.commit,
             "git.push": self.push,
+            "git.revert": self.revert,
             "git.status": self.status,
         }
 
@@ -169,6 +170,32 @@ class CodeAdapterSet:
             "git.commit",
             f"Committed {sha[:8]}: {message}",
             {"root": str(root), "sha": sha, "message": message},
+        )
+
+    def revert(self, req: CapabilityRequest) -> ToolResult:
+        """Undo a committed change by creating an inverse commit.
+
+        This is the rollback primitive behind review-after: every notified
+        change can be reversed with `git.revert sha` without rewriting history,
+        so a reviewed "not ok" has a one-step undo even after a push.
+        """
+        root = self._root_for(req.args.get("root"))
+        sha = req.args["sha"]
+        self._git(
+            root,
+            "-c",
+            "user.name=ORAC Builder",
+            "-c",
+            "user.email=builder@orac.local",
+            "revert",
+            "--no-edit",
+            sha,
+        )
+        new_sha = self._git(root, "rev-parse", "HEAD").stdout.strip()
+        return ToolResult(
+            "git.revert",
+            f"Reverted {sha[:8]} with inverse commit {new_sha[:8]}.",
+            {"root": str(root), "reverted": sha, "revert_commit": new_sha},
         )
 
     def push(self, req: CapabilityRequest) -> ToolResult:

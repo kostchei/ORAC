@@ -164,15 +164,22 @@ def test_loop_parks_and_resumes_task_on_approval(tmp_path) -> None:
     assert board.tasks[0].status == TaskStatus.DONE
 
 
-def test_agent_work_parks_task_on_pending(tmp_path) -> None:
+def test_agent_work_parks_task_on_pending(tmp_path, monkeypatch) -> None:
     store = _make_store(tmp_path)
     store.grant("Builder", "git.push")
     broker = ToolBroker.from_store(store, repo_root=tmp_path)
     agent = next(a for a in build_core_agents(RulesBrain(), broker) if a.name == "Builder")
     task = Task(title="push", status=TaskStatus.IN_PROGRESS)
 
-    # git.push is approval-gated by the risk model; driving it through the agent
-    # path must park the task rather than dispatch.
+    # Pin the risk verdict to APPROVE: this test exercises the park machinery,
+    # independent of which tools currently classify as approval-gated (code work
+    # is review-after; APPROVE is reserved for comms/financial/physical).
+    from orac.policy import ApprovalMode
+
+    monkeypatch.setattr(
+        "orac.broker.approval_mode_for", lambda tool, args=None: ApprovalMode.APPROVE
+    )
+
     agent._apply_builtin_action = lambda t: bool(
         agent._use(t, "git.push", root=str(tmp_path))
     )

@@ -159,8 +159,14 @@
     {
       "name": "git.push",
       "description": "Push a branch to a remote from an approved repo root.",
-      "regular_use": "External, hard-to-reverse; gated by the risk model (approval by default).",
+      "regular_use": "Runs unattended and lands in the review queue (review-after); rollback via git.revert.",
       "inputs": ["task_id", "root", "remote", "branch"]
+    },
+    {
+      "name": "git.revert",
+      "description": "Undo a committed change by creating an inverse commit (no history rewrite).",
+      "regular_use": "The rollback primitive behind review-after: a reviewed 'not ok' has a one-step undo.",
+      "inputs": ["task_id", "root", "sha"]
     }
   ]
 }

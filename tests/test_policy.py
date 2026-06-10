@@ -21,12 +21,27 @@ def test_unclassified_tool_fails_closed() -> None:
 
 
 def test_modes_match_the_user_policy_shape() -> None:
-    # reads and checkpoint-first code work run unattended
+    # Review-after, not ask-before: code work never blocks the loop.
     assert approval_mode_for("fs_read") is ApprovalMode.AUTO
     assert approval_mode_for("repo.write_file") is ApprovalMode.AUTO
     assert approval_mode_for("git.commit") is ApprovalMode.AUTO
-    # pushing is the gated, external step (conservative default)
-    assert approval_mode_for("git.push") is ApprovalMode.APPROVE
+    assert approval_mode_for("git.revert") is ApprovalMode.AUTO
+    # push runs unattended but lands in the review queue
+    assert approval_mode_for("git.push") is ApprovalMode.NOTIFY
+
+
+def test_approve_is_reserved_for_the_irreversible_external() -> None:
+    # The blocking gate exists only where rollback does not: comms-grade
+    # external-irreversible, financial, physical.
+    assert approval_mode(
+        RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PUBLIC)
+    ) is ApprovalMode.APPROVE
+    assert approval_mode(
+        RiskClass(Reversibility.REVERSIBLE, Externality.FINANCIAL)
+    ) is ApprovalMode.APPROVE
+    assert approval_mode(
+        RiskClass(Reversibility.HARD, Externality.PHYSICAL)
+    ) is ApprovalMode.APPROVE
 
 
 def test_throttle_table_is_total() -> None:

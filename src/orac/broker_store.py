@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
     resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    tool        TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    args_json   TEXT NOT NULL,
+    acked       INTEGER NOT NULL DEFAULT 0,
+    acked_at    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS rate_counters (
     agent       TEXT NOT NULL,
     tool        TEXT NOT NULL,
@@ -60,6 +72,19 @@ class AuditEntry:
     status: str
     message: str
     args: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Notification:
+    id: int
+    created_at: str
+    agent: str
+    tool: str
+    task_id: str
+    message: str
+    args: dict[str, Any]
+    acked: bool
+    acked_at: str | None
 
 
 @dataclass(frozen=True)
@@ -180,6 +205,64 @@ class BrokerStore:
             )
             for row in rows
         ]
+
+    # --- notifications (the review-after queue) ----------------------------
+
+    def record_notification(
+        self, req: CapabilityRequest, result: CapabilityResult
+    ) -> int:
+        """Queue a completed action for retrospective human review.
+
+        This is the "I did X, here is the result — ok?" surface: the action has
+        already run; the human reviews after the fact and can roll back.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO notifications "
+                "(created_at, agent, tool, task_id, message, args_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    now_iso(),
+                    req.agent,
+                    req.tool,
+                    req.task_id,
+                    result.message,
+                    json.dumps(req.args, sort_keys=True),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_notifications(self, unacked_only: bool = True) -> list[Notification]:
+        query = "SELECT * FROM notifications"
+        if unacked_only:
+            query += " WHERE acked = 0"
+        query += " ORDER BY id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query).fetchall()
+        return [
+            Notification(
+                id=row["id"],
+                created_at=row["created_at"],
+                agent=row["agent"],
+                tool=row["tool"],
+                task_id=row["task_id"],
+                message=row["message"],
+                args=json.loads(row["args_json"]),
+                acked=bool(row["acked"]),
+                acked_at=row["acked_at"],
+            )
+            for row in rows
+        ]
+
+    def ack_notification(self, notification_id: int) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE notifications SET acked = 1, acked_at = ? "
+                "WHERE id = ? AND acked = 0",
+                (now_iso(), notification_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"No unacked notification {notification_id}.")
 
     # --- pending approvals ------------------------------------------------
 

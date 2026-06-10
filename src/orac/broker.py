@@ -113,15 +113,21 @@ class ToolBroker:
                 message=f"Agent {req.agent!r} is not granted tool {req.tool!r}.",
             )
 
-        # The risk model decides what happens next (design §4.4). APPROVE parks
-        # for a human; AUTO and NOTIFY both dispatch (NOTIFY's transport is P6).
+        # The risk model decides what happens next (design §4.4). Review-after,
+        # not ask-before: AUTO and NOTIFY both dispatch immediately; NOTIFY also
+        # queues the completed action for retrospective review ("I did X — ok?
+        # rollback available"). APPROVE parks for a human first and is reserved
+        # for the genuinely irreversible (comms / financial / physical).
         mode = approval_mode_for(req.tool, req.args)
         if mode is ApprovalMode.APPROVE:
             gate = self._check_approval(req)
             if gate is not None:
                 return gate
 
-        return self._dispatch(req, task)
+        result = self._dispatch(req, task)
+        if mode is ApprovalMode.NOTIFY and self.store is not None:
+            self.store.record_notification(req, result)
+        return result
 
     def _check_approval(self, req: CapabilityRequest) -> CapabilityResult | None:
         """Return a pending result if the request is not yet approved, else None.
