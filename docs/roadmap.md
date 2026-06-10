@@ -38,7 +38,7 @@ Ordered; each step keeps the suite green.
 - [x] **Group 1 write slice** (Builder only, checkpoint-first, confined to approved repo roots): `git.create_branch`, `repo.write_file`, `git.commit`. *(Substrate: local subprocess git/pytest, no external agent framework. `repo.apply_patch` deferred — `repo.write_file` covers creation for now.)*
 - [ ] **P2 — Council skeleton.** `council.py` with the four lenses as *deterministic* checks; wire into `broker._decide`; per-lens verdicts to audit.
 - [ ] **P3 — Aggregation + pending.** Any BLOCK → denied; any ESCALATE → existing pending path. `git.push` / external steps park for approval.
-- [ ] **P4 — Subtask contract.** `parent_id` child tasks + `SubtaskContract`; Orchestrator decomposes a self-improvement goal and spawns the Builder.
+- [x] **P4 — Subtask contract.** `subtasks.py`: `SubtaskContract` (instruction-down, self-contained), `parent_id` child tasks, `run_build` = spawn → Builder executes via broker (branch → path-scoped write/commit → tests) → summary-up to the parent. Tests fail → child+parent BLOCKED. Council loop skips doer subtasks. *Return-edge check is deterministic (tests must pass) until P2/P3 replace it with council review.*
 - [ ] **`browser.verify_local_app`** — verification before a task may reach `done`.
 
 **Exit criterion for Milestone A:** idle ORAC picks a self-improvement task, branches, applies a

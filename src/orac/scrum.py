@@ -62,6 +62,10 @@ class Scrum:
         touched: set[str] = set()
         for _ in range(cycles):
             for task in board.tasks:
+                if task.parent_id is not None and "contract" in task.metadata:
+                    # Doer subtasks (Builder children) are driven by their
+                    # runner, not the council round-robin.
+                    continue
                 if task.status == TaskStatus.PENDING_APPROVAL:
                     if self._resume_if_resolved(task):
                         touched.add(task.id)

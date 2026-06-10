@@ -84,6 +84,7 @@ class Task:
     id: str = field(default_factory=lambda: uuid4().hex[:8])
     status: TaskStatus = TaskStatus.BACKLOG
     assignee: str | None = None
+    parent_id: str | None = None
     acceptance_criteria: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     work_log: list[WorkLog] = field(default_factory=list)
@@ -134,6 +135,7 @@ class Task:
             points=int(data.get("points", 1)),
             status=TaskStatus(data.get("status", TaskStatus.BACKLOG)),
             assignee=data.get("assignee"),
+            parent_id=data.get("parent_id"),
             acceptance_criteria=list(data.get("acceptance_criteria", [])),
             metadata=dict(data.get("metadata", {})),
             work_log=[WorkLog.from_dict(item) for item in data.get("work_log", [])],
