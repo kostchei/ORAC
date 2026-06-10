@@ -4,8 +4,10 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from orac.broker_store import BrokerStore
 from orac.browser_brain import ensure_browser_foundation_ready
 from orac.llm import build_brain
+from orac.notify import review_queue_summary
 from orac.model_policy import (
     ModelPolicyStore,
     ensure_lmstudio_model_loaded,
@@ -48,12 +50,18 @@ def run_daemon(root: Path | str = ".", interval_seconds: int = 60, cycles: int =
         result = ensure_browser_foundation_ready(policy, orac_root=root)
         print(f"Browser foundation: {result.get('action')} — {result.get('message', '')}")
     print(f"ORAC daemon running every {interval_seconds}s. Press Ctrl+C to stop.")
+    broker_store = BrokerStore(root).init()
     while True:
         tick = run_daemon_tick(store, cycles=cycles)
         print(
             f"tick brain={tick.brain} model={tick.model} touched={tick.touched_tasks} "
             f"done={tick.done_tasks} reason={tick.reason}"
         )
+        # Notify transport (P6): surface the review queue each tick so an
+        # unattended run reaches the operator instead of waiting to be polled.
+        summary = review_queue_summary(broker_store)
+        if not summary.is_clear:
+            print(summary.message())
         time.sleep(interval_seconds)
 
 

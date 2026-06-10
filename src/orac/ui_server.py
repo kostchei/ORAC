@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
+from orac.broker_store import BrokerStore
 from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
 from orac.dependency_installer import install_audio_stack
 from orac.llm import build_brain
@@ -20,6 +21,7 @@ from orac.model_policy import (
     lmstudio_loaded_models,
     verify_model_slots,
 )
+from orac.notify import review_queue_summary
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
@@ -160,6 +162,9 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
             if self.path == "/api/loop/status":
                 self._send_json(runtime.status())
                 return
+            if self.path == "/api/reviews":
+                self._send_json(_reviews_payload(store))
+                return
             self.send_error(404)
 
         def do_POST(self) -> None:
@@ -267,4 +272,18 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         "loaded_models": lmstudio_loaded_models(),
         "settings": ModelPolicyStore(store).load_policy(),
         "audio": audio_status().to_dict(),
+        # Notify transport (P6): the review-queue pressure, so the UI can badge
+        # the unacked count without a separate poll.
+        "review_queue": review_queue_summary(BrokerStore(store.root).init()).to_dict(),
+    }
+
+
+def _reviews_payload(store: BoardStore) -> dict[str, Any]:
+    """The full review queue for the UI cockpit (read-only mirror of the CLI)."""
+    bstore = BrokerStore(store.root).init()
+    return {
+        "summary": review_queue_summary(bstore).to_dict(),
+        "pending_approvals": [asdict(p) for p in bstore.list_pending()],
+        "notifications": [asdict(n) for n in bstore.list_notifications(unacked_only=True)],
+        "standing_grants": [asdict(g) for g in bstore.list_standing_grants()],
     }

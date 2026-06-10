@@ -113,9 +113,13 @@ category starts until item 4 has produced real evidence.
    park. A pre-authorised action still dispatches and lands in the notify queue (review-after), and
    it **never** bypasses the council floor — a dedicated test asserts the Sentinel gate still
    escalates a self-modification even with a broad standing grant. CLI: `orac standing
-   list/add/revoke`. **Remaining: notify transport** — nothing pings a human yet; the cockpit only
-   answers when polled. Next: a Windows toast, or `orac ui` surfacing the unacked count
-   (`ui_server.py` has no review-queue endpoints yet).
+   list/add/revoke`.
+   **Notify transport: done (passive channels).** `notify.review_queue_summary(store)` turns the
+   queue state (unacked notifications + pending approvals) into one operator-facing signal. The
+   daemon prints it each tick when non-empty, so an unattended run surfaces its queue instead of
+   waiting to be polled; the UI exposes it in `/api/state` (`review_queue`) and a read-only
+   `/api/reviews` endpoint mirroring the CLI cockpit. **Optional follow-up:** a true push channel
+   (Windows toast) consuming the same summary, and UI buttons to ack/approve from the browser.
 4. **Soak run, then choose the next surface.** The exit criterion's stated unknown is live-model
    quality, not machinery. A few daemon-days with 1–3 in place generates the labelled escalation
    data the lens-eval suite wants, and decides what earns the next slot: Group 2 (Communications,
@@ -125,10 +129,14 @@ category starts until item 4 has produced real evidence.
 
 ## Milestone B — Mature the governance, then widen the surface (POST-BOOTSTRAP)
 
-- [ ] **P5 — LLM lenses (risk-gated).** Lenses escalate to the model only when the risk class
-      warrants; cheap edges stay deterministic. Cost/latency guardrails land here.
-- [ ] **P6 — Standing grants + notify.** Short-circuit the human requirement for pre-authorised
-      recurring intent (the fish-feeder case), rate-capped via `rate_counters`. Notify transport.
+- [x] **P5 — LLM lenses (risk-gated).** Lenses escalate to the model only on consequential edges
+      (`LLM_REVIEWED_TOOLS`); cheap edges stay deterministic. Calibrated + scored (`orac lenses
+      eval`), live-fire verified. *(Landed during the bootstrap — see Milestone A.)*
+- [x] **P6 — Standing grants + notify.** Standing grants short-circuit the human requirement for
+      pre-authorised recurring intent (the fish-feeder case), rate-capped via `rate_counters`,
+      without ever waiving the safety floor. Notify transport surfaces the queue each daemon tick
+      and in the UI state. *(See Build-order item 3. Optional follow-up: a push toast + UI
+      ack/approve buttons.)*
 - [ ] **Credential vault** (DPAPI / Windows Credential Manager, opaque `credential_ref`,
       redaction at the logging layer). **Hard blocker for Group 2.**
 
