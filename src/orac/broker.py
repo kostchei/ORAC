@@ -163,18 +163,43 @@ class ToolBroker:
         # queues the completed action for retrospective review ("I did X — ok?
         # rollback available"). APPROVE parks for a human first and is reserved
         # for the genuinely irreversible (comms / financial / physical).
+        #
+        # A standing grant (P6) short-circuits the APPROVE park for pre-authorised
+        # recurring intent (the fish-feeder case), rate-capped per day. It still
+        # dispatches + notifies, so the human reviews after the fact. It does NOT
+        # bypass the council ESCALATE above — the safety floor (Sentinel and the
+        # fair-share/churn lenses) is never waived by a standing grant.
         mode = approval_mode_for(req.tool, req.args)
+        standing_granted = False
         if mode is ApprovalMode.APPROVE:
-            gate = self._check_approval(req)
-            if gate is not None:
-                return gate
+            standing_granted = self._standing_grant_clears(req)
+            if not standing_granted:
+                gate = self._check_approval(req)
+                if gate is not None:
+                    return gate
 
         result = self._dispatch(req, task)
         if self.store is not None:
             self.store.bump_rate(req.agent, req.tool, today_utc())
-            if mode is ApprovalMode.NOTIFY:
+            if mode is ApprovalMode.NOTIFY or standing_granted:
                 self.store.record_notification(req, result)
         return result
+
+    def _standing_grant_clears(self, req: CapabilityRequest) -> bool:
+        """True if an active, in-cap standing grant pre-authorises this call.
+
+        The grant's daily cap is counted against the same ``rate_counters`` the
+        Optimise lens reads, so a pre-authorised action that has already run its
+        cap for the day falls back to the human-approval park rather than running
+        unbounded.
+        """
+        if self.store is None:
+            return False
+        grant = self.store.standing_grant_for(req.agent, req.tool, req.args)
+        if grant is None:
+            return False
+        used_today = self.store.rate_count(req.agent, req.tool, today_utc())
+        return used_today < grant.daily_cap
 
     def _check_approval(
         self, req: CapabilityRequest, reason: str | None = None

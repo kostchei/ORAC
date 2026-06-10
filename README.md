@@ -113,6 +113,19 @@ orac rollback <id> --push    # also push the inverse commit to the action's remo
 
 Each pending approval is shown with the council lens verdict that parked it, so you review a cause, not just a tool name. `rollback` only works when the action recorded a commit sha (e.g. `git.push`); an action with nothing to revert fails closed and asks you to undo it manually. Rollbacks are recorded in the same audit log as agent actions, under a `human` principal.
 
+### Standing grants (pre-authorised recurring intent)
+
+Some recurring actions should not park for approval every time — the canonical case is a scheduled physical action like feeding a fish. A standing grant pre-authorises one `(agent, tool)` (optionally pinned to exact arguments) to run without parking, up to a daily cap; over the cap it falls back to human approval:
+
+```powershell
+orac standing add --agent Operator --tool execute_action --daily-cap 3 --reason "feed the fish"
+orac standing add --agent Operator --tool execute_action --daily-cap 1 --reason "feed at 8am" --args-json '{"device":"feeder","grams":5}'
+orac standing list
+orac standing revoke <id>
+```
+
+A pre-authorised action still dispatches *and* lands in the review queue (you see it after the fact, with rollback). A standing grant only short-circuits the risk model's approval park — it **never** waives the council's safety floor: the Sentinel self-modification gate, the fair-share band, and the churn/duplicate lenses all still apply. The system cannot grant itself permission to edit its own governor.
+
 ## LM Studio
 
 ORAC expects LM Studio's local OpenAI-compatible server at `http://localhost:1234/v1` by default. When ORAC starts, it starts the LM Studio server if the `lms` CLI is available. If a local model is already loaded, ORAC keeps it. If no model is loaded, ORAC checks available RAM and loads the largest suitable local model it can fit within the resource policy, preferring tool-use models when possible.

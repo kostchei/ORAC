@@ -180,6 +180,29 @@ def make_parser() -> argparse.ArgumentParser:
         help="Also push the inverse commit to the notification's remote.",
     )
 
+    standing = subparsers.add_parser(
+        "standing",
+        help="Standing grants: pre-authorise a recurring action, rate-capped per day.",
+    )
+    standing_sub = standing.add_subparsers(dest="standing_command", required=True)
+    standing_sub.add_parser("list", help="List active standing grants.")
+    sg_add = standing_sub.add_parser(
+        "add", help="Pre-authorise (agent, tool) to run without parking, up to a daily cap."
+    )
+    sg_add.add_argument("--agent", required=True, help="Agent the grant applies to.")
+    sg_add.add_argument("--tool", required=True, help="Tool the grant pre-authorises.")
+    sg_add.add_argument(
+        "--daily-cap", type=int, required=True,
+        help="Max auto-approved runs per day; over the cap, the action parks for a human.",
+    )
+    sg_add.add_argument("--reason", required=True, help="Why this is pre-authorised.")
+    sg_add.add_argument(
+        "--args-json", default=None,
+        help="Optional canonical args JSON to pin the grant to one exact call.",
+    )
+    sg_revoke = standing_sub.add_parser("revoke", help="Revoke an active standing grant.")
+    sg_revoke.add_argument("id", type=int, help="Standing grant id from `orac standing list`.")
+
     ui = subparsers.add_parser("ui", help="Run the local ORAC web UI.")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8765)
@@ -624,6 +647,47 @@ def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_standing_list(store: BoardStore) -> int:
+    bstore = BrokerStore(store.root).init()
+    grants = bstore.list_standing_grants()
+    if not grants:
+        print("No active standing grants.")
+        return 0
+    print("Active standing grants — `orac standing revoke <id>`:")
+    for g in grants:
+        scope = "any args" if g.args_pattern is None else f"args={g.args_pattern}"
+        print(f"  [{g.id}] {g.agent} {g.tool} ({scope}) cap={g.daily_cap}/day — {g.reason}")
+    return 0
+
+
+def cmd_standing_add(store: BoardStore, args: argparse.Namespace) -> int:
+    bstore = BrokerStore(store.root).init()
+    parsed_args = json.loads(args.args_json) if args.args_json else None
+    grant_id = bstore.create_standing_grant(
+        agent=args.agent,
+        tool=args.tool,
+        daily_cap=args.daily_cap,
+        reason=args.reason,
+        args=parsed_args,
+    )
+    print(
+        f"Added standing grant [{grant_id}]: {args.agent} may run {args.tool} "
+        f"up to {args.daily_cap}x/day without parking."
+    )
+    return 0
+
+
+def cmd_standing_revoke(store: BoardStore, args: argparse.Namespace) -> int:
+    bstore = BrokerStore(store.root).init()
+    try:
+        bstore.revoke_standing_grant(args.id)
+    except KeyError as exc:
+        print(str(exc))
+        return 1
+    print(f"Revoked standing grant [{args.id}].")
+    return 0
+
+
 def cmd_lmstudio_status() -> int:
     print(json.dumps(lmstudio_status(), indent=2, sort_keys=True))
     return 0
@@ -744,6 +808,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ack(store, args)
     if args.command == "rollback":
         return cmd_rollback(store, args)
+    if args.command == "standing" and args.standing_command == "list":
+        return cmd_standing_list(store)
+    if args.command == "standing" and args.standing_command == "add":
+        return cmd_standing_add(store, args)
+    if args.command == "standing" and args.standing_command == "revoke":
+        return cmd_standing_revoke(store, args)
     if args.command == "models" and args.models_command == "lmstudio-status":
         return cmd_lmstudio_status()
     if args.command == "models" and args.models_command == "lmstudio-models":

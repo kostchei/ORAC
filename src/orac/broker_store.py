@@ -71,6 +71,18 @@ CREATE TABLE IF NOT EXISTS rate_counters (
     count       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (agent, tool, day)
 );
+
+CREATE TABLE IF NOT EXISTS standing_grants (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL,
+    agent        TEXT NOT NULL,
+    tool         TEXT NOT NULL,
+    args_pattern TEXT,
+    daily_cap    INTEGER NOT NULL,
+    reason       TEXT NOT NULL,
+    revoked      INTEGER NOT NULL DEFAULT 0,
+    revoked_at   TEXT
+);
 """
 
 
@@ -98,6 +110,29 @@ class Notification:
     data: dict[str, Any]
     acked: bool
     acked_at: str | None
+
+
+@dataclass(frozen=True)
+class StandingGrant:
+    """A pre-authorisation that lets a recurring action run without parking for a
+    human each time, capped per day (the fish-feeder case, design P6).
+
+    ``args_pattern`` None matches any arguments; otherwise it is the canonical
+    args JSON the call must match exactly. A standing grant short-circuits the
+    risk model's APPROVE gate only — it never bypasses the council's safety
+    floor (Sentinel/Optimise/Simple/Efficiency), so it cannot authorise the
+    system to edit its own governor or exceed the fair-share band.
+    """
+
+    id: int
+    created_at: str
+    agent: str
+    tool: str
+    args_pattern: str | None
+    daily_cap: int
+    reason: str
+    revoked: bool
+    revoked_at: str | None
 
 
 @dataclass(frozen=True)
@@ -500,3 +535,82 @@ class BrokerStore:
                 (agent, tool, day),
             ).fetchone()
         return int(row["count"]) if row else 0
+
+    # --- standing grants (P6: pre-authorised recurring intent) -------------
+
+    def create_standing_grant(
+        self,
+        agent: str,
+        tool: str,
+        daily_cap: int,
+        reason: str,
+        args: dict[str, Any] | None = None,
+    ) -> int:
+        """Pre-authorise up to ``daily_cap`` runs/day of (agent, tool[, args]).
+
+        ``args`` None grants any arguments; a dict pins the grant to that exact
+        call. ``daily_cap`` must be positive — a zero/negative cap is not a grant.
+        """
+        if daily_cap <= 0:
+            raise ValueError("A standing grant needs a positive daily cap.")
+        pattern = None if args is None else json.dumps(args, sort_keys=True)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO standing_grants "
+                "(created_at, agent, tool, args_pattern, daily_cap, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (now_iso(), agent, tool, pattern, daily_cap, reason),
+            )
+            return int(cursor.lastrowid)
+
+    def list_standing_grants(self, active_only: bool = True) -> list[StandingGrant]:
+        query = "SELECT * FROM standing_grants"
+        if active_only:
+            query += " WHERE revoked = 0"
+        query += " ORDER BY id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query).fetchall()
+        return [self._standing_from_row(row) for row in rows]
+
+    def revoke_standing_grant(self, grant_id: int) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE standing_grants SET revoked = 1, revoked_at = ? "
+                "WHERE id = ? AND revoked = 0",
+                (now_iso(), grant_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"No active standing grant {grant_id} to revoke.")
+
+    def standing_grant_for(
+        self, agent: str, tool: str, args: dict[str, Any]
+    ) -> StandingGrant | None:
+        """The active standing grant covering this exact call, if any.
+
+        An args-pinned grant must match the canonical args exactly; an
+        unpinned (NULL pattern) grant covers any args for that (agent, tool).
+        The most specific (pinned) match wins so a narrow grant is preferred.
+        """
+        args_json = json.dumps(args, sort_keys=True)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM standing_grants "
+                "WHERE revoked = 0 AND agent = ? AND tool = ? "
+                "AND (args_pattern IS NULL OR args_pattern = ?) "
+                "ORDER BY args_pattern IS NULL, id ASC",
+                (agent, tool, args_json),
+            ).fetchall()
+        return self._standing_from_row(rows[0]) if rows else None
+
+    def _standing_from_row(self, row: sqlite3.Row) -> StandingGrant:
+        return StandingGrant(
+            id=row["id"],
+            created_at=row["created_at"],
+            agent=row["agent"],
+            tool=row["tool"],
+            args_pattern=row["args_pattern"],
+            daily_cap=row["daily_cap"],
+            reason=row["reason"],
+            revoked=bool(row["revoked"]),
+            revoked_at=row["revoked_at"],
+        )

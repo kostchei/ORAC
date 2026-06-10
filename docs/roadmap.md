@@ -105,11 +105,17 @@ category starts until item 4 has produced real evidence.
    so something else must confirm it). **Remaining:** `browser.verify_local_app` — the frontend
    instance of the same step (reuse `browser_brain.py`'s Playwright/CDP plumbing); this is the
    last open Milestone A checkbox.
-3. **P6 — notify transport + standing grants.** Notifications are durable rows but nothing pings a
-   human; the cockpit only answers when polled. With 1–2 in place the daemon can genuinely run
-   overnight, so the queue needs to reach the operator: a Windows toast (or `orac ui` surfacing the
-   unacked count — `ui_server.py` has no review-queue endpoints yet). Standing grants
-   (the fish-feeder case), rate-capped via `rate_counters`, belong to the same step and can trail.
+3. **P6 — notify transport + standing grants.** **Standing grants: done.**
+   `BrokerStore.create_standing_grant / list_standing_grants / revoke_standing_grant /
+   standing_grant_for` + broker integration: a standing grant pre-authorises one `(agent, tool)`
+   (optionally args-pinned) to run without parking the risk-model APPROVE gate, rate-capped per day
+   via the same `rate_counters` the Optimise lens reads; over the cap it falls back to the human
+   park. A pre-authorised action still dispatches and lands in the notify queue (review-after), and
+   it **never** bypasses the council floor — a dedicated test asserts the Sentinel gate still
+   escalates a self-modification even with a broad standing grant. CLI: `orac standing
+   list/add/revoke`. **Remaining: notify transport** — nothing pings a human yet; the cockpit only
+   answers when polled. Next: a Windows toast, or `orac ui` surfacing the unacked count
+   (`ui_server.py` has no review-queue endpoints yet).
 4. **Soak run, then choose the next surface.** The exit criterion's stated unknown is live-model
    quality, not machinery. A few daemon-days with 1–3 in place generates the labelled escalation
    data the lens-eval suite wants, and decides what earns the next slot: Group 2 (Communications,
