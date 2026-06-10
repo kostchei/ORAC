@@ -14,14 +14,16 @@ from orac.models import LensDecision, LensVerdict, ReviewContext
 # The deterministic lenses in council.py are the floor — cheap SQL/state checks
 # that catch the obvious (closed-task drift, exact duplicate, runaway rate).
 # This layer sits beside them: each of the three judgement lenses (Optimise,
-# Simple, Efficiency) calls an actual — deliberately small, local — model that
-# reads ONE edge through its own purpose and returns pass / escalate / block.
-# The broker aggregates LLM and deterministic verdicts together, unchanged.
+# Simple, Efficiency) calls an actual local model that reads ONE edge through
+# its own purpose and returns pass / escalate / block. It runs on whatever
+# local model the loop already uses (model_policy.lens_brain) — no separate
+# "small" model is required; the small slot is only an optional busy-box
+# override. The broker aggregates LLM and deterministic verdicts, unchanged.
 #
 # Cost discipline: the council convenes on every store-backed call, but most are
 # reads. The model is consulted only on consequential edges (a write, commit,
 # push, or revert) — the places where waste, churn, and scope-creep actually
-# live. A handful of small-model calls per build, not three per file read.
+# live. A handful of local-model calls per build, not three per file read.
 
 # The edges worth a model's attention: state-changing artifacts a lens can judge.
 LLM_REVIEWED_TOOLS = frozenset(
