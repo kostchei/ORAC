@@ -24,10 +24,30 @@ DEFAULT_POLICY = {
     "lmstudio_url": "http://localhost:1234/v1",
     "lmstudio_standard_model": "",
     "lmstudio_small_model": "",
+    # Per-work-kind model slots (docs/model-selection.md). Empty = use standard.
+    "lmstudio_code_model": "",
+    "lmstudio_creative_model": "",
     "lmstudio_identifier": "orac-local",
     "lmstudio_autoload_on_start": True,
     "daemon_interval_seconds": 60,
     "daemon_cycles": 1,
+}
+
+# Local-vs-foundation routing by call site (docs/model-selection.md): foundation
+# where one decision steers hours of local work, local where volume lives.
+ROUTING = {
+    "origination": "foundation",
+    "decomposition": "foundation",
+    "session": "local",
+    "lens": "local",
+    "escalation": "foundation",
+}
+
+# Which local model slot serves which work kind.
+_KIND_MODEL_SLOTS = {
+    "code": "lmstudio_code_model",
+    "media": "lmstudio_creative_model",
+    "event": "lmstudio_creative_model",
 }
 
 
@@ -126,6 +146,42 @@ class ModelPolicyStore:
         return round(float(self.load_policy()["estimated_foundation_cycle_usd"]), 4)
 
 
+def model_for_work_kind(policy: dict[str, Any], work_kind: str | None) -> str:
+    """The local model slot for a work kind; standard model when no slot is set."""
+    slot = _KIND_MODEL_SLOTS.get(work_kind or "")
+    if slot and policy.get(slot):
+        return str(policy[slot])
+    return str(policy.get("lmstudio_standard_model") or "local")
+
+
+def can_escalate(policy_store: "ModelPolicyStore") -> bool:
+    """Escalation to foundation requires a key and remaining daily budget."""
+    if not _has_foundation_key():
+        return False
+    policy = policy_store.load_policy()
+    daily_cap = round(
+        float(policy["daily_foundation_budget_usd"])
+        * float(policy["foundation_daily_fraction"]),
+        4,
+    )
+    return policy_store.spent_today() < daily_cap
+
+
+def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
+    """The brain for a doer session (docs/model-selection.md routing).
+
+    Escalated tasks (a local session already failed on them) get the foundation
+    brain; everything else runs locally on the work kind's model slot. Callers
+    must check :func:`can_escalate` before marking a task escalated.
+    """
+    from orac.llm import build_brain
+
+    if task.metadata.get("escalated"):
+        return build_brain("foundation")
+    policy = policy_store.load_policy()
+    return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
+
+
 def _today_key() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
@@ -152,6 +208,8 @@ def _coerce_policy(policy: dict[str, Any]) -> dict[str, Any]:
         "lmstudio_url",
         "lmstudio_standard_model",
         "lmstudio_small_model",
+        "lmstudio_code_model",
+        "lmstudio_creative_model",
         "lmstudio_identifier",
     ]:
         policy[key] = str(policy.get(key, ""))

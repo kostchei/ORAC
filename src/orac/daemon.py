@@ -41,6 +41,7 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
         build_brain(decision.brain, model=decision.model),
         root=store.root,
         originate_when_idle=True,
+        route_models=True,
     ).run(board, cycles=cycles)
     store.save(board)
     if decision.brain == "foundation" and result.touched_tasks:

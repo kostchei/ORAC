@@ -27,6 +27,23 @@ from orac.models import CapabilityRequest, CapabilityStatus, Task
 OBSERVATION_LIMIT = 1500
 DEFAULT_MAX_STEPS = 16
 
+# Enforced server-side where the brain supports structured output (LM Studio /
+# OpenAI response_format): the model physically cannot emit a malformed
+# decision. Brains without the capability get plain think() and the strict
+# parser below remains the gate.
+DECISION_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "args": {"type": "object"},
+        "done": {"type": "boolean"},
+        "summary": {"type": "string"},
+        "blocked": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+
 PROTOCOL = """\
 RESPONSE PROTOCOL — reply with a single JSON object and nothing else:
   {"tool": "<tool name>", "args": {...}}   to use one of your tools
@@ -53,10 +70,20 @@ class AgentSession:
     transcript: list[str] = field(default_factory=list)
 
     def run(self, task: Task, contract: str) -> SessionResult:
+        think_json = getattr(self.brain, "think_json", None)
         for step in range(1, self.max_steps + 1):
-            reply = self.brain.think(
-                self.profile.name, self.profile.slug, task, self._prompt(contract)
-            )
+            if callable(think_json):
+                reply = think_json(
+                    self.profile.name,
+                    self.profile.slug,
+                    task,
+                    self._prompt(contract),
+                    DECISION_SCHEMA,
+                )
+            else:
+                reply = self.brain.think(
+                    self.profile.name, self.profile.slug, task, self._prompt(contract)
+                )
             decision = parse_decision(reply)
             if decision is None:
                 return self._finish(

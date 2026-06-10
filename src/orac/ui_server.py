@@ -77,6 +77,7 @@ class UIRuntime:
                     build_brain(decision.brain, model=decision.model),
                     root=self.store.root,
                     originate_when_idle=True,
+                    route_models=True,
                 ).run(board, cycles=int(policy["daemon_cycles"]))
                 self.store.save(board)
                 if decision.brain == "foundation" and result.touched_tasks:

@@ -25,6 +25,18 @@ from orac.models import Board, Task, TaskStatus
 ORIGINATE_DAILY_CAP = 3
 ORIGINATE_COUNTER = "originate_task"
 
+ORIGINATION_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "goal": {"type": "string"},
+        "work_kind": {"type": "string"},
+        "why": {"type": "string"},
+        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["goal"],
+    "additionalProperties": False,
+}
+
 ACTIVE_STATUSES = {
     TaskStatus.BACKLOG,
     TaskStatus.CLARIFYING,
@@ -120,11 +132,14 @@ def originate(
         for spec in WORK_KINDS.values()
     )
     seed = Task(title="originate self-improvement", description="driver tick")
-    reply = brain.think(
-        "Optimiser", "optimiser", seed, ORIGINATION_PROMPT.format(
-            kinds=kinds, telemetry=json.dumps(telemetry, indent=2)
-        )
+    prompt = ORIGINATION_PROMPT.format(
+        kinds=kinds, telemetry=json.dumps(telemetry, indent=2)
     )
+    think_json = getattr(brain, "think_json", None)
+    if callable(think_json):
+        reply = think_json("Optimiser", "optimiser", seed, prompt, ORIGINATION_SCHEMA)
+    else:
+        reply = brain.think("Optimiser", "optimiser", seed, prompt)
     decision = parse_decision(reply)
     if decision is None or "goal" not in decision:
         raise ValueError(f"Optimise driver produced no parseable goal: {reply[:300]!r}")

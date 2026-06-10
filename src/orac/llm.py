@@ -15,6 +15,13 @@ class Brain(Protocol):
         ...
 
 
+# Brains MAY additionally provide structured output:
+#   think_json(agent_name, role, task, prompt, schema) -> str
+# where the backend enforces the JSON schema at the token level (LM Studio /
+# OpenAI-compatible response_format). Callers detect the capability with
+# getattr; brains without it get plain think() plus strict parsing downstream.
+
+
 @dataclass
 class RulesBrain:
     def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
@@ -70,25 +77,43 @@ class OpenAICompatibleBrain:
     timeout_seconds: int = 60
 
     def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        f"You are {agent_name}, the {role.replace('_', ' ')} agent in ORAC. "
-                        "Write only the concise work-log entry."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Task: {task.title}\nDescription: {task.description}\n\n{prompt}"
-                    ),
-                },
-            ],
-            "temperature": 0.2,
+        return self._complete(self._messages(agent_name, role, task, prompt))
+
+    def think_json(
+        self, agent_name: str, role: str, task: Task, prompt: str, schema: dict
+    ) -> str:
+        """Structured output: the server enforces the schema at the token level
+        (LM Studio / OpenAI response_format), so the reply is valid JSON by
+        construction for any capable model."""
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "decision", "strict": True, "schema": schema},
         }
+        return self._complete(
+            self._messages(agent_name, role, task, prompt), response_format
+        )
+
+    def _messages(self, agent_name: str, role: str, task: Task, prompt: str) -> list[dict]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    f"You are {agent_name}, the {role.replace('_', ' ')} agent in ORAC. "
+                    "Write only the concise work-log entry."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Task: {task.title}\nDescription: {task.description}\n\n{prompt}"
+                ),
+            },
+        ]
+
+    def _complete(self, messages: list[dict], response_format: dict | None = None) -> str:
+        payload: dict = {"model": self.model, "messages": messages, "temperature": 0.2}
+        if response_format is not None:
+            payload["response_format"] = response_format
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -139,6 +164,34 @@ class FallbackBrain:
             task.add_log("system", f"Primary brain unavailable, using rules brain: {exc}")
             return self.fallback.think(agent_name, role, task, prompt)
         return response or self.fallback.think(agent_name, role, task, prompt)
+
+    def think_json(
+        self, agent_name: str, role: str, task: Task, prompt: str, schema: dict
+    ) -> str:
+        """Delegate structured output to whichever layer supports it.
+
+        Availability fallback only (primary down -> next layer); a layer with
+        no structured support uses plain think(), and the caller's strict
+        parser still decides whether the reply stands.
+        """
+        primary_json = getattr(self.primary, "think_json", None)
+        try:
+            if callable(primary_json):
+                response = primary_json(agent_name, role, task, prompt, schema)
+            else:
+                response = self.primary.think(agent_name, role, task, prompt)
+        except RuntimeError as exc:
+            task.add_log("system", f"Primary brain unavailable, using fallback: {exc}")
+            return self._fallback_json(agent_name, role, task, prompt, schema)
+        return response or self._fallback_json(agent_name, role, task, prompt, schema)
+
+    def _fallback_json(
+        self, agent_name: str, role: str, task: Task, prompt: str, schema: dict
+    ) -> str:
+        fallback_json = getattr(self.fallback, "think_json", None)
+        if callable(fallback_json):
+            return fallback_json(agent_name, role, task, prompt, schema)
+        return self.fallback.think(agent_name, role, task, prompt)
 
 
 def build_brain(name: str, model: str | None = None) -> Brain:

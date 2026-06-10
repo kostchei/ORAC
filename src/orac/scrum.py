@@ -22,6 +22,10 @@ class Scrum:
     brain: Brain
     root: Path | str | None = None
     originate_when_idle: bool = False
+    # Route doer sessions per docs/model-selection.md (work-kind model slots,
+    # escalate-to-foundation after a local failure). Off by default so explicit
+    # brain choices (tests, CLI --brain) stay exact.
+    route_models: bool = False
     agents: list[RuntimeAgent] = field(init=False)
     store: BrokerStore | None = field(init=False, default=None)
     broker: ToolBroker | None = field(init=False, default=None)
@@ -106,13 +110,41 @@ class Scrum:
             goal=str(task.metadata["goal"]),
             acceptance_criteria=tuple(task.acceptance_criteria),
             work_kind=task.work_kind,
-            brain=self.brain,
+            brain=self._session_brain(task),
             broker=self.broker,
             context={"repo_root": str(self.root)},
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)
+        elif child.status == TaskStatus.BLOCKED:
+            self._maybe_escalate(task)
         return True
+
+    def _session_brain(self, task: Task) -> Brain:
+        if not self.route_models:
+            return self.brain
+        from orac.model_policy import ModelPolicyStore, session_brain_for
+        from orac.storage import BoardStore
+
+        return session_brain_for(ModelPolicyStore(BoardStore(self.root)), task)
+
+    def _maybe_escalate(self, task: Task) -> None:
+        """One failed local session is the cheapest signal a task exceeds local
+        capability: mark it escalated and requeue it for the foundation model.
+        A second failure stays BLOCKED for the human."""
+        if not self.route_models or task.metadata.get("escalated"):
+            return
+        from orac.model_policy import ModelPolicyStore, can_escalate
+        from orac.storage import BoardStore
+
+        if not can_escalate(ModelPolicyStore(BoardStore(self.root))):
+            return
+        task.metadata["escalated"] = True
+        task.transition(TaskStatus.READY)
+        task.add_log(
+            "system",
+            "Local session failed; escalated — will retry with the foundation model.",
+        )
 
     def _originate_if_idle(self, board: Board) -> str | None:
         """Initiative: when nothing is active, the Optimise driver forms one
