@@ -8,8 +8,17 @@ from orac.adapters import Adapter, default_adapters
 from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.code_adapters import code_adapters_for
-from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, Task
-from orac.policy import ApprovalMode, approval_mode_for
+from orac.council import Council, today_utc
+from orac.models import (
+    CapabilityRequest,
+    CapabilityResult,
+    CapabilityStatus,
+    EdgeKind,
+    LensDecision,
+    ReviewContext,
+    Task,
+)
+from orac.policy import ApprovalMode, approval_mode_for, risk_class
 from orac.tooling import RegularToolExecutor
 
 
@@ -35,6 +44,7 @@ class ToolBroker:
     known_tools: frozenset[str]
     adapters: dict[str, Adapter] = field(default_factory=dict)
     store: BrokerStore | None = None
+    council: Council | None = None
 
     @classmethod
     def from_manifests(
@@ -78,6 +88,7 @@ class ToolBroker:
             known_tools=cls._known_tools(),
             adapters=cls._adapters(repo_root),
             store=store,
+            council=Council(store=store),
         )
 
     @staticmethod
@@ -113,6 +124,29 @@ class ToolBroker:
                 message=f"Agent {req.agent!r} is not granted tool {req.tool!r}.",
             )
 
+        # Edge-check council (design §4.2-§4.3): four deterministic lenses
+        # review the edge. Any BLOCK -> denied with the lens's reason; any
+        # ESCALATE -> the existing pending/park machinery (a human approval of
+        # the exact request clears it). Per-lens verdicts are persisted whenever
+        # the review is not clean.
+        risk = risk_class(req.tool, req.args)
+        if self.council is not None:
+            verdict = self.council.review(
+                ReviewContext(edge=EdgeKind.TOOL_CALL, request=req, task=task, risk=risk)
+            )
+            if self.store is not None and any(
+                v.decision is not LensDecision.PASS for v in verdict.lenses
+            ):
+                self.store.record_review(req, verdict)
+            if verdict.status is CapabilityStatus.DENIED:
+                return CapabilityResult(
+                    status=CapabilityStatus.DENIED, tool=req.tool, message=verdict.reason
+                )
+            if verdict.status is CapabilityStatus.PENDING:
+                gate = self._check_approval(req, reason=verdict.reason)
+                if gate is not None:
+                    return gate
+
         # The risk model decides what happens next (design §4.4). Review-after,
         # not ask-before: AUTO and NOTIFY both dispatch immediately; NOTIFY also
         # queues the completed action for retrospective review ("I did X — ok?
@@ -125,15 +159,21 @@ class ToolBroker:
                 return gate
 
         result = self._dispatch(req, task)
-        if mode is ApprovalMode.NOTIFY and self.store is not None:
-            self.store.record_notification(req, result)
+        if self.store is not None:
+            self.store.bump_rate(req.agent, req.tool, today_utc())
+            if mode is ApprovalMode.NOTIFY:
+                self.store.record_notification(req, result)
         return result
 
-    def _check_approval(self, req: CapabilityRequest) -> CapabilityResult | None:
+    def _check_approval(
+        self, req: CapabilityRequest, reason: str | None = None
+    ) -> CapabilityResult | None:
         """Return a pending result if the request is not yet approved, else None.
 
         Approval state is durable, so once a human approves the exact request the
-        agent can re-issue it and fall through to dispatch.
+        agent can re-issue it and fall through to dispatch. ``reason`` carries
+        why the call was parked (e.g. the escalating lens's explanation) so the
+        human reviews a cause, not just a tool name.
         """
         if self.store is None:
             return CapabilityResult(
@@ -148,10 +188,13 @@ class ToolBroker:
             pending_id = self.store.create_pending(req)
         else:
             pending_id = self.store.get_pending_id(req)
+        message = f"Awaiting human approval for {req.tool!r}."
+        if reason:
+            message = f"{message} Cause: {reason}"
         return CapabilityResult(
             status=CapabilityStatus.PENDING,
             tool=req.tool,
-            message=f"Awaiting human approval for {req.tool!r}.",
+            message=message,
             data={"pending_id": pending_id},
         )
 

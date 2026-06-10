@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orac.agent_registry import load_agent_profiles
-from orac.models import CapabilityRequest, CapabilityResult, now_iso
+from orac.models import CapabilityRequest, CapabilityResult, CouncilVerdict, now_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS grants (
@@ -38,6 +38,17 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
     args_json   TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'pending',
     resolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    tool        TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    lens        TEXT NOT NULL,
+    decision    TEXT NOT NULL,
+    reason      TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -205,6 +216,68 @@ class BrokerStore:
             )
             for row in rows
         ]
+
+    # --- audit queries used by the deterministic council lenses ------------
+
+    def audit_count(self, agent: str, tool: str, task_id: str) -> int:
+        """How many times this agent has successfully used this tool on this task."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM audit "
+                "WHERE agent = ? AND tool = ? AND task_id = ? AND status = 'allowed'",
+                (agent, tool, task_id),
+            ).fetchone()
+        return int(row[0])
+
+    def audit_count_exact(
+        self, agent: str, tool: str, task_id: str, args_json: str
+    ) -> int:
+        """How many times this exact call (same args) already succeeded."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM audit "
+                "WHERE agent = ? AND tool = ? AND task_id = ? AND args_json = ? "
+                "AND status = 'allowed'",
+                (agent, tool, task_id, args_json),
+            ).fetchone()
+        return int(row[0])
+
+    # --- council reviews ----------------------------------------------------
+
+    def record_review(self, req: CapabilityRequest, verdict: CouncilVerdict) -> None:
+        """Persist the per-lens verdicts for a non-clean council review.
+
+        One row per lens, so every block or escalation is explainable later.
+        """
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO reviews "
+                "(created_at, agent, tool, task_id, lens, decision, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        now_iso(),
+                        req.agent,
+                        req.tool,
+                        req.task_id,
+                        lens.lens,
+                        lens.decision.value,
+                        lens.reason,
+                    )
+                    for lens in verdict.lenses
+                ],
+            )
+
+    def list_reviews(self, task_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM reviews"
+        params: tuple[Any, ...] = ()
+        if task_id is not None:
+            query += " WHERE task_id = ?"
+            params = (task_id,)
+        query += " ORDER BY id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
 
     # --- notifications (the review-after queue) ----------------------------
 
