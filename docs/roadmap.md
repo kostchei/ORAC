@@ -39,11 +39,22 @@ Ordered; each step keeps the suite green.
 - [x] **P2 — Council skeleton.** `council.py`: four deterministic lenses — Intent blocks action on closed tasks (drift), Optimise escalates over the daily rate band (fair share), Simple escalates patch-churn (same tool hammered on one task), Efficiency blocks identical duplicate writes. Convenes on every store-backed call (cheap SQL); per-lens verdicts persisted to a `reviews` table whenever a review is not clean. Rate counters now bumped on every dispatch.
 - [x] **P3 — Aggregation + pending.** Any BLOCK → denied (lens reason in the result); any ESCALATE → existing pending/park machinery, cleared by human approval of the exact request. Proven end-to-end: a council ESCALATE parks the task through the agent path, with the `reviews` trail naming the lens that parked it. *(Code stays review-after per user ruling — `git.push` notifies rather than parks.)*
 - [x] **P4 — Subtask contract.** `subtasks.py`: `SubtaskContract` (instruction-down, self-contained), `parent_id` child tasks, `run_build` = spawn → Builder executes via broker (branch → path-scoped write/commit → tests) → summary-up to the parent. Tests fail → child+parent BLOCKED. Council loop skips doer subtasks. *Return-edge check is deterministic (tests must pass) until P2/P3 replace it with council review.*
+- [x] **Agency.** `agent_session.py`: the loop where the model chooses — fresh context + single
+      contract, structured tool decisions, broker adjudicates every choice, denials are
+      observations to adapt to, only the summary crosses back. `subtasks.py::run_goal_build`:
+      Builder handed a *goal*, not a spec. `driver.py`: initiative — idle board → Optimise reads
+      its own telemetry (board, council flags, review queue, roadmap gaps) → originates one
+      locked self-improvement task (rate-capped/day; driver faults surface as visible BLOCKED
+      tasks). Loop wiring: goal tasks are really built by Builder sessions, never theatrically
+      advanced; the daemon originates when idle.
 - [ ] **`browser.verify_local_app`** — verification before a task may reach `done`.
 
 **Exit criterion for Milestone A:** idle ORAC picks a self-improvement task, branches, applies a
 patch, runs tests, and opens the change for human approval — end-to-end through the council, with
-the Builder as the only writer. At that point the system can start helping build everything below.
+the Builder as the only writer. **Status: the full circle runs in tests** (idle → originate →
+locked READY → Builder session builds on a branch with real files and passing tests → DONE →
+loop originates the next goal). Caveat: proven with a scripted model; quality with a live local
+model (LM Studio tool-format reliability) is the remaining unknown, not the machinery.
 
 ---
 
