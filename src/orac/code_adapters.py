@@ -257,11 +257,23 @@ class CodeAdapterSet:
         branch = req.args.get("branch")
         if branch:
             push_args.append(branch)
+        # Record what is being published: the review queue needs the head sha so
+        # a "not ok" verdict can be rolled back (`git.revert sha`) later.
+        sha = self._git(root, "rev-parse", "HEAD").stdout.strip()
+        head_branch = branch or self._git(
+            root, "rev-parse", "--abbrev-ref", "HEAD"
+        ).stdout.strip()
         proc = self._git(root, *push_args)
         return ToolResult(
             "git.push",
-            f"Pushed to {remote}.",
-            {"root": str(root), "remote": remote, "detail": proc.stderr.strip()},
+            f"Pushed {sha[:8]} ({head_branch}) to {remote}.",
+            {
+                "root": str(root),
+                "remote": remote,
+                "branch": head_branch,
+                "sha": sha,
+                "detail": proc.stderr.strip(),
+            },
         )
 
     # --- test adapter -----------------------------------------------------

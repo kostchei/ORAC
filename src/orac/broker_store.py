@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     task_id     TEXT NOT NULL,
     message     TEXT NOT NULL,
     args_json   TEXT NOT NULL,
+    data_json   TEXT NOT NULL DEFAULT '{}',
     acked       INTEGER NOT NULL DEFAULT 0,
     acked_at    TEXT
 );
@@ -94,6 +95,7 @@ class Notification:
     task_id: str
     message: str
     args: dict[str, Any]
+    data: dict[str, Any]
     acked: bool
     acked_at: str | None
 
@@ -136,8 +138,19 @@ class BrokerStore:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
             self._seed_manifest_grants(conn)
         return self
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Upgrade pre-existing databases created before a schema column existed."""
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)")}
+        if "data_json" not in columns:
+            conn.execute(
+                "ALTER TABLE notifications "
+                "ADD COLUMN data_json TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def _seed_manifest_grants(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT COUNT(*) FROM grants").fetchone()[0]
@@ -268,13 +281,20 @@ class BrokerStore:
                 ],
             )
 
-    def list_reviews(self, task_id: str | None = None) -> list[dict[str, Any]]:
+    def list_reviews(
+        self, task_id: str | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
         query = "SELECT * FROM reviews"
         params: tuple[Any, ...] = ()
         if task_id is not None:
             query += " WHERE task_id = ?"
             params = (task_id,)
-        query += " ORDER BY id ASC"
+        if limit is None:
+            query += " ORDER BY id ASC"
+        else:
+            # Recent-first when capped: the cockpit shows the latest verdicts.
+            query += " ORDER BY id DESC LIMIT ?"
+            params = (*params, limit)
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
@@ -287,13 +307,15 @@ class BrokerStore:
         """Queue a completed action for retrospective human review.
 
         This is the "I did X, here is the result — ok?" surface: the action has
-        already run; the human reviews after the fact and can roll back.
+        already run; the human reviews after the fact and can roll back. The
+        result data is kept so the review surface can act on it (e.g. the pushed
+        commit sha is what `orac rollback` reverts).
         """
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO notifications "
-                "(created_at, agent, tool, task_id, message, args_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(created_at, agent, tool, task_id, message, args_json, data_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     now_iso(),
                     req.agent,
@@ -301,6 +323,7 @@ class BrokerStore:
                     req.task_id,
                     result.message,
                     json.dumps(req.args, sort_keys=True),
+                    json.dumps(result.data, sort_keys=True, default=str),
                 ),
             )
             return int(cursor.lastrowid)
@@ -321,11 +344,32 @@ class BrokerStore:
                 task_id=row["task_id"],
                 message=row["message"],
                 args=json.loads(row["args_json"]),
+                data=json.loads(row["data_json"]),
                 acked=bool(row["acked"]),
                 acked_at=row["acked_at"],
             )
             for row in rows
         ]
+
+    def get_notification(self, notification_id: int) -> Notification:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM notifications WHERE id = ?", (notification_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"No notification {notification_id}.")
+        return Notification(
+            id=row["id"],
+            created_at=row["created_at"],
+            agent=row["agent"],
+            tool=row["tool"],
+            task_id=row["task_id"],
+            message=row["message"],
+            args=json.loads(row["args_json"]),
+            data=json.loads(row["data_json"]),
+            acked=bool(row["acked"]),
+            acked_at=row["acked_at"],
+        )
 
     def ack_notification(self, notification_id: int) -> None:
         with self._connect() as conn:

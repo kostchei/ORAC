@@ -24,7 +24,15 @@ from orac.model_policy import (
     lmstudio_status,
     verify_model_slots,
 )
-from orac.models import Task, TaskStatus
+from orac.broker_store import BrokerStore, Notification
+from orac.code_adapters import code_adapters_for
+from orac.models import (
+    CapabilityRequest,
+    CapabilityResult,
+    CapabilityStatus,
+    Task,
+    TaskStatus,
+)
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
@@ -132,6 +140,44 @@ def make_parser() -> argparse.ArgumentParser:
     lenses_sub = lenses.add_subparsers(dest="lenses_command", required=True)
     lenses_sub.add_parser(
         "eval", help="Score the lenses against curated cases on the local lens model."
+    )
+
+    reviews = subparsers.add_parser(
+        "reviews",
+        help="Show the review queue: pending approvals, unacked actions, lens verdicts.",
+    )
+    reviews.add_argument(
+        "--all", action="store_true",
+        help="Include acked notifications and the full lens-verdict history.",
+    )
+    reviews.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Machine-readable output (e.g. for calibration tooling).",
+    )
+
+    approve = subparsers.add_parser(
+        "approve", help="Approve a pending request; the loop resumes the parked task."
+    )
+    approve.add_argument("id", type=int, help="Pending approval id from `orac reviews`.")
+
+    deny = subparsers.add_parser(
+        "deny", help="Deny a pending request; the loop blocks the parked task."
+    )
+    deny.add_argument("id", type=int, help="Pending approval id from `orac reviews`.")
+
+    ack = subparsers.add_parser(
+        "ack", help="Acknowledge a reviewed action as ok (it stands as done)."
+    )
+    ack.add_argument("id", type=int, help="Notification id from `orac reviews`.")
+
+    rollback = subparsers.add_parser(
+        "rollback",
+        help="Undo a reviewed action: git-revert its recorded commit, then ack it.",
+    )
+    rollback.add_argument("id", type=int, help="Notification id from `orac reviews`.")
+    rollback.add_argument(
+        "--push", action="store_true",
+        help="Also push the inverse commit to the notification's remote.",
     )
 
     ui = subparsers.add_parser("ui", help="Run the local ORAC web UI.")
@@ -419,6 +465,165 @@ def cmd_lenses_eval(store: BoardStore) -> int:
     return print_scorecard(run_lens_eval(brain))
 
 
+# How many lens verdicts the default `orac reviews` view shows.
+_RECENT_VERDICTS = 20
+
+
+def cmd_reviews(store: BoardStore, args: argparse.Namespace) -> int:
+    bstore = BrokerStore(store.root).init()
+    pending = bstore.list_pending()
+    notifications = bstore.list_notifications(unacked_only=not args.all)
+    verdicts = (
+        bstore.list_reviews()
+        if args.all
+        else bstore.list_reviews(limit=_RECENT_VERDICTS)
+    )
+
+    if args.as_json:
+        payload = {
+            "pending_approvals": [asdict(p) for p in pending],
+            "notifications": [asdict(n) for n in notifications],
+            "lens_verdicts": verdicts,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if not pending and not notifications and not verdicts:
+        print("Review queue is clear.")
+        return 0
+
+    # The cause behind each parked request: the latest non-pass lens verdict for
+    # the same (agent, tool, task) edge, so the human reviews a reason, not just
+    # a tool name.
+    causes: dict[tuple[str, str, str], str] = {}
+    for row in bstore.list_reviews():
+        if row["decision"] != "pass":
+            key = (row["agent"], row["tool"], row["task_id"])
+            causes[key] = f"{row['lens']}[{row['decision']}]: {row['reason']}"
+
+    if pending:
+        print("Pending approvals — `orac approve <id>` / `orac deny <id>`:")
+        for p in pending:
+            print(f"  [{p.id}] {p.created_at} {p.agent} {p.tool} task={p.task_id}")
+            if p.args:
+                print(f"      args: {json.dumps(p.args, sort_keys=True)}")
+            cause = causes.get((p.agent, p.tool, p.task_id))
+            if cause:
+                print(f"      cause: {cause}")
+    if notifications:
+        print(
+            "Completed actions awaiting review — `orac ack <id>` to accept, "
+            "`orac rollback <id>` to undo:"
+        )
+        for n in notifications:
+            acked = " (acked)" if n.acked else ""
+            print(f"  [{n.id}]{acked} {n.created_at} {n.agent} {n.tool} task={n.task_id}")
+            print(f"      {n.message}")
+            if n.args:
+                print(f"      args: {json.dumps(n.args, sort_keys=True)}")
+    if verdicts:
+        scope = "all" if args.all else f"latest {len(verdicts)}"
+        print(f"Lens verdicts ({scope}):")
+        for row in verdicts:
+            print(
+                f"  {row['created_at']} {row['lens']}[{row['decision']}] "
+                f"{row['agent']}/{row['tool']} task={row['task_id']}: {row['reason']}"
+            )
+    return 0
+
+
+def cmd_approve(store: BoardStore, args: argparse.Namespace, status: str) -> int:
+    bstore = BrokerStore(store.root).init()
+    try:
+        bstore.resolve_pending(args.id, status)
+    except KeyError as exc:
+        print(str(exc))
+        return 1
+    pending = bstore.get_pending(args.id)
+    outcome = (
+        "the loop will resume the parked task"
+        if status == "approved"
+        else "the loop will block the parked task"
+    )
+    print(f"{status.capitalize()} [{args.id}] {pending.agent} {pending.tool}; {outcome}.")
+    return 0
+
+
+def cmd_ack(store: BoardStore, args: argparse.Namespace) -> int:
+    bstore = BrokerStore(store.root).init()
+    try:
+        bstore.ack_notification(args.id)
+    except KeyError as exc:
+        print(str(exc))
+        return 1
+    note = bstore.get_notification(args.id)
+    print(f"Acked [{args.id}] {note.agent} {note.tool}: {note.message}")
+    return 0
+
+
+def _rollback_request(
+    note: Notification, root: str, tool: str, call_args: dict[str, object]
+) -> CapabilityRequest:
+    # Rollback is the human acting on the review queue, so it is recorded under
+    # the "human" principal — distinct from any agent — in the same audit log.
+    return CapabilityRequest(agent="human", tool=tool, task_id=note.task_id, args=call_args)
+
+
+def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
+    bstore = BrokerStore(store.root).init()
+    try:
+        note = bstore.get_notification(args.id)
+    except KeyError as exc:
+        print(str(exc))
+        return 1
+    sha = note.data.get("sha")
+    if not sha:
+        print(
+            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha; "
+            "nothing to revert automatically. Revert manually, then `orac ack`."
+        )
+        return 1
+    root = str(note.data.get("root") or store.root.resolve())
+    adapters = code_adapters_for((root,))
+
+    req = _rollback_request(note, root, "git.revert", {"root": root, "sha": sha})
+    result = adapters["git.revert"](req)
+    bstore.record_audit(
+        req,
+        CapabilityResult(
+            status=CapabilityStatus.ALLOWED,
+            tool=result.name,
+            message=result.message,
+            data=result.data,
+        ),
+    )
+    print(result.message)
+
+    if args.push:
+        remote = note.data.get("remote", "origin")
+        push_args: dict[str, object] = {"root": root, "remote": remote}
+        branch = note.data.get("branch")
+        if branch:
+            push_args["branch"] = branch
+        push_req = _rollback_request(note, root, "git.push", push_args)
+        push_result = adapters["git.push"](push_req)
+        bstore.record_audit(
+            push_req,
+            CapabilityResult(
+                status=CapabilityStatus.ALLOWED,
+                tool=push_result.name,
+                message=push_result.message,
+                data=push_result.data,
+            ),
+        )
+        print(push_result.message)
+
+    if not note.acked:
+        bstore.ack_notification(note.id)
+    print(f"Rolled back and acked [{note.id}] {note.agent} {note.tool}.")
+    return 0
+
+
 def cmd_lmstudio_status() -> int:
     print(json.dumps(lmstudio_status(), indent=2, sort_keys=True))
     return 0
@@ -529,6 +734,16 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models_verify(store)
     if args.command == "lenses" and args.lenses_command == "eval":
         return cmd_lenses_eval(store)
+    if args.command == "reviews":
+        return cmd_reviews(store, args)
+    if args.command == "approve":
+        return cmd_approve(store, args, "approved")
+    if args.command == "deny":
+        return cmd_approve(store, args, "denied")
+    if args.command == "ack":
+        return cmd_ack(store, args)
+    if args.command == "rollback":
+        return cmd_rollback(store, args)
     if args.command == "models" and args.models_command == "lmstudio-status":
         return cmd_lmstudio_status()
     if args.command == "models" and args.models_command == "lmstudio-models":
