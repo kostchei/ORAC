@@ -113,6 +113,34 @@ def test_unusable_reply_escalates_rather_than_passing(tmp_path) -> None:
     assert any(r["decision"] == "escalate" and "usable verdict" in r["reason"] for r in reviews)
 
 
+def test_eval_scorecard_scores_decisive_and_borderline() -> None:
+    # Deterministic check of the eval harness's scoring (no model calls): a
+    # must-pass that passed and a must-fail that escalated are correct; a
+    # must-fail that passed is the rubber-stamp miss; borderline never counts
+    # toward decisive accuracy.
+    from orac.lens_eval import EvalCase, print_scorecard
+    from orac.models import LensDecision, LensVerdict
+
+    def case(kind):
+        return EvalCase("Simple", kind, f"{kind} case", "goal", "x")
+
+    def verdict(decision):
+        return LensVerdict(lens="Simple", decision=decision, reason="r")
+
+    perfect = [
+        (case("pass"), verdict(LensDecision.PASS)),
+        (case("fail"), verdict(LensDecision.ESCALATE)),
+        (case("borderline"), verdict(LensDecision.PASS)),
+    ]
+    assert print_scorecard(perfect) == 0  # all decisive correct
+
+    rubber_stamp = [
+        (case("pass"), verdict(LensDecision.PASS)),
+        (case("fail"), verdict(LensDecision.PASS)),  # missed a real violation
+    ]
+    assert print_scorecard(rubber_stamp) == 1
+
+
 def test_each_lens_reviews_through_its_own_persona(tmp_path) -> None:
     brain = _StubLensBrain()
     broker, _ = _setup(tmp_path, brain)

@@ -128,6 +128,12 @@ def make_parser() -> argparse.ArgumentParser:
     start = models_sub.add_parser("lmstudio-start", help="Start LM Studio local server.")
     start.add_argument("--port", type=int, default=1234)
 
+    lenses = subparsers.add_parser("lenses", help="Council LLM-lens operations.")
+    lenses_sub = lenses.add_subparsers(dest="lenses_command", required=True)
+    lenses_sub.add_parser(
+        "eval", help="Score the lenses against curated cases on the local lens model."
+    )
+
     ui = subparsers.add_parser("ui", help="Run the local ORAC web UI.")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8765)
@@ -404,6 +410,15 @@ def cmd_models_verify(store: BoardStore) -> int:
     return 0 if report["ok"] else 1
 
 
+def cmd_lenses_eval(store: BoardStore) -> int:
+    from orac.lens_eval import print_scorecard, run_lens_eval
+    from orac.model_policy import lens_brain
+
+    brain = lens_brain(ModelPolicyStore(store))
+    print(f"Evaluating lenses on local model {brain.model!r} ...")
+    return print_scorecard(run_lens_eval(brain))
+
+
 def cmd_lmstudio_status() -> int:
     print(json.dumps(lmstudio_status(), indent=2, sort_keys=True))
     return 0
@@ -512,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models_set(store, args)
     if args.command == "models" and args.models_command == "verify":
         return cmd_models_verify(store)
+    if args.command == "lenses" and args.lenses_command == "eval":
+        return cmd_lenses_eval(store)
     if args.command == "models" and args.models_command == "lmstudio-status":
         return cmd_lmstudio_status()
     if args.command == "models" and args.models_command == "lmstudio-models":

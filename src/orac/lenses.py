@@ -36,6 +36,7 @@ LENS_SLUGS: tuple[tuple[str, str], ...] = (
     ("Simple", "simples"),
     ("Efficiency", "efficiency"),
 )
+LENS_SLUG_BY_NAME = dict(LENS_SLUGS)
 
 REVIEW_SCHEMA: dict = {
     "type": "object",
@@ -95,6 +96,10 @@ class LensReviewer:
 
     def review(self, ctx: ReviewContext) -> list[LensVerdict]:
         return [self._one(name, slug, ctx) for name, slug in LENS_SLUGS]
+
+    def judge_one(self, lens_name: str, ctx: ReviewContext) -> LensVerdict:
+        """Run a single named lens — for the eval harness and targeted use."""
+        return self._one(lens_name, LENS_SLUG_BY_NAME[lens_name], ctx)
 
     def _one(self, name: str, slug: str, ctx: ReviewContext) -> LensVerdict:
         think_json = getattr(self.brain, "think_json", None)
