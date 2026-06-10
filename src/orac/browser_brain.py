@@ -29,6 +29,7 @@ _CHROME_WIN_CANDIDATES: list[str] = [
 ]
 
 # Provider configuration -------------------------------------------------------
+# Selectors verified against live DOM 2026-06-10.
 
 _PROVIDER_URLS: dict[str, str] = {
     "claude": "https://claude.ai/new",
@@ -36,19 +37,44 @@ _PROVIDER_URLS: dict[str, str] = {
     "openai": "https://chatgpt.com",
 }
 
-# CSS selectors for the text-entry area.  Multiple candidates separated by
-# commas are tried in order by playwright's wait_for_selector.
+# The editable text-entry area for each provider.
 _INPUT_SELECTORS: dict[str, str] = {
-    "claude": 'div[contenteditable="true"]',
-    "gemini": 'rich-textarea div[contenteditable], div[contenteditable][aria-label]',
-    "openai": '#prompt-textarea, div[contenteditable][placeholder]',
+    # ProseMirror div with role=textbox; class "tiptap ProseMirror" confirmed live.
+    "claude": 'div.ProseMirror[role="textbox"]',
+    # Quill editor inside Google's <rich-textarea> custom element.
+    "gemini": 'rich-textarea .ql-editor[contenteditable="true"]',
+    # ProseMirror div with stable id; also has class "ProseMirror".
+    "openai": '#prompt-textarea',
 }
 
-# CSS selectors for the last AI-turn response element.
+# The submit button for each provider.
+# Claude and Gemini both use aria-label="Send message".
+# ChatGPT uses data-testid="send-button".
+_SEND_BUTTON_SELECTORS: dict[str, str] = {
+    "claude": 'button[aria-label="Send message"]',
+    "gemini": 'button[aria-label="Send message"]',
+    "openai": '[data-testid="send-button"]',
+}
+
+# The container element for the last AI response turn.
 _RESPONSE_SELECTORS: dict[str, str] = {
-    "claude": '.font-claude-message, [data-testid="chat-message-content"]',
-    "gemini": 'model-response .markdown, .response-content',
-    "openai": '[data-message-author-role="assistant"] .markdown, [data-message-author-role="assistant"]',
+    # Class confirmed: "font-claude-response …"
+    "claude": '[class*="font-claude-response"]',
+    # Angular custom element; contains <message-content> for the actual prose.
+    "gemini": 'model-response',
+    # data-message-author-role="assistant" on each turn div.
+    "openai": '[data-message-author-role="assistant"]',
+}
+
+# Selector that is present WHILE streaming and absent when the response is
+# complete.  None = fall back to text-stability polling.
+_STREAMING_SELECTORS: dict[str, str | None] = {
+    # data-is-streaming attribute on the response element while Claude is typing.
+    "claude": '[data-is-streaming]',
+    # Gemini has no reliable streaming attribute — use text stability.
+    "gemini": None,
+    # ChatGPT adds class "result-streaming" to the prose div while generating.
+    "openai": '.result-streaming',
 }
 
 
@@ -163,52 +189,88 @@ class BrowserFoundationBrain:
 
         page.goto(url, wait_until="networkidle", timeout=30_000)
 
-        # Snapshot of the page before submission — used to extract new text.
-        before_text = page.inner_text("body")
+        # --- Phase 0: count existing response elements before submission ------
+        response_sel = _RESPONSE_SELECTORS[self.provider]
+        before_count = len(page.query_selector_all(response_sel))
 
-        # Focus the input, clear any draft, type the prompt.
+        # --- Phase 1: type and submit -----------------------------------------
         input_sel = _INPUT_SELECTORS[self.provider]
         inp = page.wait_for_selector(input_sel, timeout=15_000)
         inp.click()
         page.keyboard.press("Control+a")
         page.keyboard.type(text, delay=5)
-        page.keyboard.press("Enter")
 
-        # Poll until the response stabilises (no body-text change for
-        # stabilise_seconds) or the hard timeout is hit.
+        # Click the send button if visible; fall back to Enter.
+        send_sel = _SEND_BUTTON_SELECTORS[self.provider]
+        try:
+            send_btn = page.wait_for_selector(send_sel, timeout=5_000)
+            send_btn.click()
+        except Exception:  # noqa: BLE001
+            page.keyboard.press("Enter")
+
+        # --- Phase 2: wait for a new response element to appear ---------------
         deadline = time.monotonic() + self.timeout_seconds
-        last_body = ""
-        last_change_at = time.monotonic()
-        timed_out = True
-
         while time.monotonic() < deadline:
             if self.poll_interval > 0:
                 time.sleep(self.poll_interval)
-            body = page.inner_text("body")
-            if body != last_body:
-                last_change_at = time.monotonic()
-                last_body = body
-            elif time.monotonic() - last_change_at >= self.stabilise_seconds:
-                timed_out = False
+            if len(page.query_selector_all(response_sel)) > before_count:
                 break
-
-        if timed_out:
+        else:
             raise TimeoutError(
                 f"Browser foundation timed out after {self.timeout_seconds}s "
-                f"waiting for {self.provider!r} response to stabilise."
+                f"waiting for {self.provider!r} to start responding."
             )
 
-        # Try provider-specific response element first.
-        response_sel = _RESPONSE_SELECTORS[self.provider]
-        try:
-            els = page.query_selector_all(response_sel)
-            if els:
-                return els[-1].inner_text().strip()
-        except Exception:  # noqa: BLE001
-            pass
+        # --- Phase 3: wait for streaming to finish ----------------------------
+        streaming_sel = _STREAMING_SELECTORS[self.provider]
+        if streaming_sel:
+            # Stream-indicator approach: wait until the element disappears.
+            while time.monotonic() < deadline:
+                if self.poll_interval > 0:
+                    time.sleep(self.poll_interval)
+                if not page.query_selector_all(streaming_sel):
+                    break
+            else:
+                raise TimeoutError(
+                    f"Browser foundation timed out after {self.timeout_seconds}s "
+                    f"waiting for {self.provider!r} streaming to complete."
+                )
+        else:
+            # Text-stability fallback (Gemini): no change for stabilise_seconds.
+            last_text = ""
+            last_change_at = time.monotonic()
+            while time.monotonic() < deadline:
+                if self.poll_interval > 0:
+                    time.sleep(self.poll_interval)
+                els = page.query_selector_all(response_sel)
+                current = els[-1].inner_text() if els else ""
+                if current != last_text:
+                    last_change_at = time.monotonic()
+                    last_text = current
+                elif time.monotonic() - last_change_at >= self.stabilise_seconds:
+                    break
+            else:
+                raise TimeoutError(
+                    f"Browser foundation timed out after {self.timeout_seconds}s "
+                    f"waiting for {self.provider!r} response to stabilise."
+                )
 
-        # Fallback: extract all text that appeared after the snapshot.
-        return _extract_new_text(before_text, page.inner_text("body"))
+        # --- Phase 4: extract the response text -------------------------------
+        els = page.query_selector_all(response_sel)
+        if not els:
+            raise RuntimeError(
+                f"Browser foundation: response element disappeared after streaming "
+                f"({self.provider!r}, selector={response_sel!r})."
+            )
+        last_el = els[-1]
+
+        # Gemini: the actual prose lives inside <message-content>.
+        if self.provider == "gemini":
+            inner = last_el.query_selector("message-content")
+            if inner:
+                return inner.inner_text().strip()
+
+        return last_el.inner_text().strip()
 
 
 def _extract_new_text(before: str, after: str) -> str:

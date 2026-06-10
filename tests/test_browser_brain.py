@@ -23,30 +23,36 @@ from orac.storage import BoardStore
 # Playwright mock helpers
 # ---------------------------------------------------------------------------
 
+# Known streaming selectors (absent = streaming finished).
+_STREAMING_SELS = {"[data-is-streaming]", ".result-streaming"}
 
-def _make_page(
-    before_text: str = "page header",
-    after_text: str = "page header\n\nUser: hello\n\nAI: the answer",
-    response_el_text: str = "the answer",
-) -> MagicMock:
-    """Build a mock playwright Page.
 
-    inner_text("body") alternates: first call = before_text, subsequent = after_text.
-    query_selector_all returns a single element whose inner_text() = response_el_text.
+def _make_page(response_el_text: str = "the answer", provider: str = "claude") -> MagicMock:
+    """Build a mock playwright Page for the two-phase wait flow.
+
+    query_selector_all behaviour:
+    - streaming selectors → always [] (streaming already done)
+    - response selectors  → [] on the first call (before submission),
+                            [response_el] on all subsequent calls
     """
     page = MagicMock()
-    call_counts: dict[str, int] = {"inner_text": 0}
-
-    def inner_text(selector: str) -> str:
-        call_counts["inner_text"] += 1
-        if call_counts["inner_text"] == 1:
-            return before_text
-        return after_text
-
-    page.inner_text.side_effect = inner_text
     response_el = MagicMock()
     response_el.inner_text.return_value = response_el_text
-    page.query_selector_all.return_value = [response_el]
+    # Gemini message-content sub-element lookup.
+    response_el.query_selector.return_value = None
+
+    qsa_count: list[int] = [0]
+
+    def query_selector_all(selector: str) -> list:
+        if selector in _STREAMING_SELS:
+            return []  # streaming finished immediately
+        # Response selector: first call (Phase 0 count) returns empty.
+        qsa_count[0] += 1
+        if qsa_count[0] == 1:
+            return []
+        return [response_el]
+
+    page.query_selector_all.side_effect = query_selector_all
     page.wait_for_selector.return_value = MagicMock()
     return page
 
@@ -75,7 +81,7 @@ def _make_playwright_cm(page: MagicMock) -> MagicMock:
 
 def test_think_sends_prompt_and_returns_response(monkeypatch) -> None:
     task = Task(title="test-task", status=TaskStatus.IN_PROGRESS)
-    page = _make_page(response_el_text="AI result")
+    page = _make_page(response_el_text="AI result", provider="claude")
     monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
 
     brain = BrowserFoundationBrain(
@@ -87,7 +93,8 @@ def test_think_sends_prompt_and_returns_response(monkeypatch) -> None:
     page.goto.assert_called_once_with(
         "https://claude.ai/new", wait_until="networkidle", timeout=30_000
     )
-    page.keyboard.press.assert_any_call("Enter")
+    # Send button was clicked (wait_for_selector was called for the send button).
+    assert page.wait_for_selector.call_count >= 2  # input + send button
 
 
 def test_think_json_appends_schema_instructions(monkeypatch) -> None:
@@ -162,46 +169,57 @@ def test_cdp_connection_failure_raises_runtime_error(monkeypatch) -> None:
         brain.think("builder", "doer", task, "prompt")
 
 
-def test_response_fallback_to_text_diff_when_no_selector_match(monkeypatch) -> None:
+def test_send_button_fallback_to_enter_when_not_found(monkeypatch) -> None:
+    """If the send button doesn't appear, the brain falls back to pressing Enter."""
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
-    page = _make_page(
-        before_text="before",
-        after_text="before\nUser: hi\nAI: fallback response",
-    )
-    page.query_selector_all.return_value = []  # no matching elements
+    page = _make_page(response_el_text="ok", provider="claude")
 
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
-    brain = BrowserFoundationBrain(
-        provider="claude", stabilise_seconds=0, poll_interval=0
-    )
-    result = brain.think("builder", "doer", task, "hi")
-    assert "fallback response" in result
-
-
-def test_timeout_raises(monkeypatch) -> None:
-    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
-    page = _make_page(
-        before_text="before",
-        after_text="before still typing...",  # text never stabilises
-    )
-    # Always return changing text so stability is never reached
+    # Make the send-button wait_for_selector fail for the send button call only.
     call_n: list[int] = [0]
+    real_wfs = page.wait_for_selector.side_effect
 
-    def evolving_text(sel: str) -> str:
+    def wfs(selector: str, **kw: object) -> object:
         call_n[0] += 1
-        return f"body text version {call_n[0]}"
+        if "Send message" in selector or "send-button" in selector:
+            raise Exception("element not found")
+        return MagicMock()
 
-    page.inner_text.side_effect = evolving_text
+    page.wait_for_selector.side_effect = wfs
+    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    brain.think("builder", "doer", task, "hi")
+    page.keyboard.press.assert_any_call("Enter")
+
+
+def test_phase2_timeout_when_response_never_appears(monkeypatch) -> None:
+    """Timeout fires in Phase 2 when no response element ever appears."""
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = MagicMock()
+    # query_selector_all always returns [] — response never appears.
+    page.query_selector_all.return_value = []
+    page.wait_for_selector.return_value = MagicMock()
 
     monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
     brain = BrowserFoundationBrain(
         provider="claude",
         timeout_seconds=1,
-        stabilise_seconds=5,  # longer than timeout
+        stabilise_seconds=0,
         poll_interval=0,
     )
     with pytest.raises(TimeoutError, match="timed out"):
         brain.think("builder", "doer", task, "prompt")
+
+
+def test_gemini_uses_text_stability_not_streaming_selector(monkeypatch) -> None:
+    """Gemini has no streaming selector — falls back to text-stability polling."""
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(response_el_text="gemini answer", provider="gemini")
+    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    brain = BrowserFoundationBrain(
+        provider="gemini", stabilise_seconds=0, poll_interval=0
+    )
+    result = brain.think("builder", "doer", task, "prompt")
+    assert result == "gemini answer"
 
 
 # ---------------------------------------------------------------------------
@@ -295,9 +313,22 @@ def test_session_brain_for_escalated_uses_browser(tmp_path, monkeypatch) -> None
     assert brain.primary.provider == "openai"
 
 
+def _idle_resources() -> object:
+    """Return a ResourceSnapshot that looks like a non-busy system."""
+    from orac.resources import ResourceSnapshot
+    return ResourceSnapshot(
+        cpu_percent=10.0, memory_percent=30.0,
+        memory_total_gb=16.0, memory_available_gb=12.0,
+        gpu_percent=0.0, vram_percent=0.0,
+        disk_free_gb=100.0, busy=False,
+        recommended_tier="local", reason="resources within policy",
+    )
+
+
 def test_decide_returns_browser_brain_when_no_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
     monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
+    monkeypatch.setattr("orac.model_policy.read_resource_snapshot", lambda _pct: _idle_resources())
     store = BoardStore(tmp_path)
     store.init()
     decision = ModelPolicyStore(store).decide()
@@ -309,6 +340,7 @@ def test_decide_returns_browser_brain_when_no_api_key(tmp_path, monkeypatch) -> 
 def test_decide_prefers_api_key_over_browser(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ORAC_FOUNDATION_API_KEY", "sk-test")
     monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
+    monkeypatch.setattr("orac.model_policy.read_resource_snapshot", lambda _pct: _idle_resources())
     store = BoardStore(tmp_path)
     store.init()
     decision = ModelPolicyStore(store).decide()
