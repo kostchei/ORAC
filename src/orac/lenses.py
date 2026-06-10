@@ -27,7 +27,7 @@ from orac.models import LensDecision, LensVerdict, ReviewContext
 
 # The edges worth a model's attention: state-changing artifacts a lens can judge.
 LLM_REVIEWED_TOOLS = frozenset(
-    {"repo.write_file", "git.commit", "git.push", "git.revert"}
+    {"repo.write_file", "repo.edit_file", "git.commit", "git.push", "git.revert"}
 )
 
 # Lens display name -> agent profile slug (whose prompts/<slug>.md is its skill).

@@ -56,6 +56,7 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # Writes are reversible because the Builder works checkpoint-first (branch +
     # commit before changing files).
     "repo.write_file": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "repo.edit_file": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "git.create_branch": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "git.commit": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     # Pushing publishes to a remote others may pull from: hard to reverse, external.
@@ -154,7 +155,8 @@ SAFETY_CRITICAL_PATHS: frozenset[str] = frozenset(
 # match on any of these escalates. Reads/searches/status are not listed: only a
 # mutation of the governor is gated, not looking at it.
 _PATH_BEARING_TOOLS: dict[str, str] = {
-    "repo.write_file": "path",   # the mutation itself
+    "repo.write_file": "path",   # whole-file mutation
+    "repo.edit_file": "path",    # surgical mutation
     "git.commit": "paths",       # making the change durable (list of paths)
 }
 

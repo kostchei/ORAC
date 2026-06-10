@@ -133,6 +133,12 @@
       "inputs": ["task_id", "path", "content"]
     },
     {
+      "name": "repo.edit_file",
+      "description": "Replace one exact, unique occurrence of 'old' text with 'new' in a file (surgical edit; prefer over rewriting the whole file). Fails if 'old' is absent or not unique.",
+      "regular_use": "Builder makes a small, reviewable change to existing code without rewriting the file.",
+      "inputs": ["task_id", "path", "old", "new"]
+    },
+    {
       "name": "repo.run_tests",
       "description": "Run pytest inside an approved repo root and report pass/fail.",
       "regular_use": "Builder verifies a change before it can reach done.",

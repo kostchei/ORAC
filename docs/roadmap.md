@@ -35,7 +35,7 @@ Ordered; each step keeps the suite green.
 - [x] **P1 — Risk throttle.** `policy.py::risk_class(tool, args)` + a total `(reversibility × externality)` throttle table → `auto`/`notify`/`approve`. Broker `_decide` consults it; the `APPROVAL_REQUIRED` stub is gone. Unclassified tools fail closed (raise). **Review-after, not ask-before (user ruling):** code work never blocks — `git.push` is `notify` (runs + lands in the review queue), `git.revert` is the one-step rollback; `approve` is reserved for comms/financial/physical. `notify` is durable now (`notifications` table + ack), transport ping still P6.
 - [x] **Builder role + privilege separation.** `builder` agent (kind `doer`, excluded from the council loop) holds the write grants; a test asserts **no reviewer/orchestrator holds any write grant** and that a reviewer write is denied at the broker. (§4.6)
 - [x] **Group 1 read slice** (read-only): `repo.read_file`, `repo.search`, `git.status`, `repo.run_tests`.
-- [x] **Group 1 write slice** (Builder only, checkpoint-first, confined to approved repo roots): `git.create_branch`, `repo.write_file`, `git.commit`. *(Substrate: local subprocess git/pytest, no external agent framework. `repo.apply_patch` deferred — `repo.write_file` covers creation for now.)*
+- [x] **Group 1 write slice** (Builder only, checkpoint-first, confined to approved repo roots): `git.create_branch`, `repo.write_file`, `repo.edit_file`, `git.commit`. *(Substrate: local subprocess git/pytest, no external agent framework. `repo.edit_file` is the surgical primitive — exact, unique, fail-closed string replacement — the deferred `repo.apply_patch` is satisfied in spirit: small reviewable diffs over whole-file rewrites, per the Karpathy guideline. It is wired through every governance layer: Builder-only grant, Sentinel safety gate, LLM lenses, risk classification.)*
 - [x] **P2 — Council skeleton.** `council.py`: four deterministic lenses — Intent blocks action on closed tasks (drift), Optimise escalates over the daily rate band (fair share), Simple escalates patch-churn (same tool hammered on one task), Efficiency blocks identical duplicate writes. Convenes on every store-backed call (cheap SQL); per-lens verdicts persisted to a `reviews` table whenever a review is not clean. Rate counters now bumped on every dispatch.
 - [x] **P3 — Aggregation + pending.** Any BLOCK → denied (lens reason in the result); any ESCALATE → existing pending/park machinery, cleared by human approval of the exact request. Proven end-to-end: a council ESCALATE parks the task through the agent path, with the `reviews` trail naming the lens that parked it. *(Code stays review-after per user ruling — `git.push` notifies rather than parks.)*
 - [x] **P4 — Subtask contract.** `subtasks.py`: `SubtaskContract` (instruction-down, self-contained), `parent_id` child tasks, `run_build` = spawn → Builder executes via broker (branch → path-scoped write/commit → tests) → summary-up to the parent. Tests fail → child+parent BLOCKED. Council loop skips doer subtasks. *Return-edge check is deterministic (tests must pass) until P2/P3 replace it with council review.*
@@ -123,7 +123,7 @@ category starts until item 4 has produced real evidence.
 4. **Soak run, then choose the next surface.** The exit criterion's stated unknown is live-model
    quality, not machinery. A few daemon-days with 1–3 in place generates the labelled escalation
    data the lens-eval suite wants, and decides what earns the next slot: Group 2 (Communications,
-   blocked on the credential vault) or more Group 1 depth (`repo.apply_patch`, still deferred).
+   blocked on the credential vault) or more Group 1 depth (e.g. `browser.verify_local_app`).
 
 ---
 
@@ -157,7 +157,7 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 
 | Decision | Blocks | Notes |
 | --- | --- | --- |
-| Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | Local subprocess git/pytest chosen; `repo.apply_patch` still deferred (`repo.write_file` covers creation) |
+| Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | **Settled:** local subprocess git/pytest. Write = `repo.write_file` (whole file) + `repo.edit_file` (surgical, fail-closed); `repo.apply_patch` satisfied in spirit |
 | ESCALATE vs BLOCK semantics (design §8.3) | P3 | **Settled:** ESCALATE→pending, BLOCK→denied |
 | Safety-critical-file gate (design §8.7) | unattended daemon run | **Promoted to Build-order item 1** (next): edits to broker/policy/council/loop **and the grant seed** escalate to human even for the Builder |
 | Credential vault | Group 2 | No real `channel.send` without it |

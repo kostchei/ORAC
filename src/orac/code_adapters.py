@@ -18,6 +18,7 @@ READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status"})
 WRITE_TOOLS = frozenset(
     {
         "repo.write_file",
+        "repo.edit_file",
         "git.create_branch",
         "git.commit",
         "git.push",
@@ -47,6 +48,7 @@ class CodeAdapterSet:
             "repo.read_file": self.read_file,
             "repo.search": self.search,
             "repo.write_file": self.write_file,
+            "repo.edit_file": self.edit_file,
             "repo.run_tests": self.run_tests,
             "git.create_branch": self.create_branch,
             "git.commit": self.commit,
@@ -155,6 +157,40 @@ class CodeAdapterSet:
             "repo.write_file",
             f"Wrote {len(content)} chars to {path}.",
             {"path": str(path), "bytes": len(content.encode("utf-8"))},
+        )
+
+    def edit_file(self, req: CapabilityRequest) -> ToolResult:
+        """Replace one exact, unique occurrence of ``old`` with ``new`` in a file.
+
+        The surgical alternative to a whole-file rewrite (the Karpathy guideline:
+        prefer small, reviewable diffs over large opaque ones). Fail-closed, no
+        fuzzy matching: ``old`` must appear exactly once, or the edit raises and
+        nothing is written — an ambiguous or absent anchor is a fault to surface,
+        not to guess at. ``old`` and ``new`` must differ.
+        """
+        path = self._resolve_in_root(req.args["path"])
+        old = req.args["old"]
+        new = req.args["new"]
+        if old == new:
+            raise ValueError("repo.edit_file: 'old' and 'new' are identical; no edit.")
+        if not path.is_file():
+            raise FileNotFoundError(f"repo.edit_file: no file at {path}.")
+        text = path.read_text(encoding="utf-8")
+        count = text.count(old)
+        if count == 0:
+            raise ValueError(
+                f"repo.edit_file: 'old' text not found in {path}; nothing to edit."
+            )
+        if count > 1:
+            raise ValueError(
+                f"repo.edit_file: 'old' text occurs {count}x in {path}; it must be "
+                "unique. Include more surrounding context to disambiguate."
+            )
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        return ToolResult(
+            "repo.edit_file",
+            f"Edited {path}: replaced {len(old)} chars with {len(new)}.",
+            {"path": str(path), "old_len": len(old), "new_len": len(new)},
         )
 
     def create_branch(self, req: CapabilityRequest) -> ToolResult:
