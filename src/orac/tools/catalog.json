@@ -155,6 +155,12 @@
       "description": "Show the porcelain working-tree status of an approved repo root.",
       "regular_use": "Builder inspects pending changes.",
       "inputs": ["task_id", "root"]
+    },
+    {
+      "name": "git.push",
+      "description": "Push a branch to a remote from an approved repo root.",
+      "regular_use": "External, hard-to-reverse; gated by the risk model (approval by default).",
+      "inputs": ["task_id", "root", "remote", "branch"]
     }
   ]
 }

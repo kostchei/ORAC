@@ -9,11 +9,8 @@ from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.code_adapters import code_adapters_for
 from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, Task
+from orac.policy import ApprovalMode, approval_mode_for
 from orac.tooling import RegularToolExecutor
-
-# Tools that touch a real external system and must clear a human approval before
-# they run. Journaling tools are not listed; they have no side effects.
-APPROVAL_REQUIRED: frozenset[str] = frozenset({"fs_read"})
 
 
 @dataclass
@@ -24,19 +21,19 @@ class ToolBroker:
     :class:`CapabilityRequest`, the broker decides allowed / denied / pending /
     error, and only on ``allowed`` does it dispatch to a handler. Two backends
     sit behind it: :class:`RegularToolExecutor` (in-memory journaling) and the
-    real :data:`~orac.adapters` (e.g. ``fs_read``, which touches the disk).
+    real adapters (e.g. ``fs_read``, the ``repo.*``/``git.*`` code tools).
 
     Grants come either from the ``agents.json`` manifest (in-memory, used by
     tests and the no-DB path) or from a :class:`BrokerStore`. When a store is
-    attached, every decision is written to the durable audit log, and tools in
-    ``approval_required`` are gated behind the pending-approval queue.
+    attached, every decision is written to the durable audit log. Whether a call
+    runs, notifies, or parks for approval is decided by the risk model
+    (:mod:`orac.policy`), not a hardcoded list.
     """
 
     executor: RegularToolExecutor
     grants: dict[str, frozenset[str]]
     known_tools: frozenset[str]
     adapters: dict[str, Adapter] = field(default_factory=dict)
-    approval_required: frozenset[str] = APPROVAL_REQUIRED
     store: BrokerStore | None = None
 
     @classmethod
@@ -116,7 +113,10 @@ class ToolBroker:
                 message=f"Agent {req.agent!r} is not granted tool {req.tool!r}.",
             )
 
-        if req.tool in self.approval_required:
+        # The risk model decides what happens next (design §4.4). APPROVE parks
+        # for a human; AUTO and NOTIFY both dispatch (NOTIFY's transport is P6).
+        mode = approval_mode_for(req.tool, req.args)
+        if mode is ApprovalMode.APPROVE:
             gate = self._check_approval(req)
             if gate is not None:
                 return gate

@@ -101,6 +101,64 @@ def test_builder_runs_tests(tmp_path) -> None:
     assert result.data["passed"] is True
 
 
+def test_commit_sails_through_but_push_parks(tmp_path) -> None:
+    _init_repo(tmp_path)
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+    task = Task(title="risk demo")
+
+    def build(tool: str, **args):
+        return broker.request(
+            CapabilityRequest(agent="Builder", tool=tool, task_id=task.id, args=args), task
+        )
+
+    (tmp_path / "f.py").write_text("X = 1\n", encoding="utf-8")
+    # git.commit is reversible+local -> auto: runs immediately.
+    assert build("git.commit", message="first").status is CapabilityStatus.ALLOWED
+
+    # git.push is hard+external -> approve: parks instead of running.
+    pushed = build("git.push", root=str(tmp_path))
+    assert pushed.status is CapabilityStatus.PENDING
+    assert "pending_id" in pushed.data
+
+
+def test_push_full_cycle_through_local_remote(tmp_path) -> None:
+    _init_repo(tmp_path)
+    remote = tmp_path.parent / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(remote)], cwd=tmp_path, check=True, capture_output=True
+    )
+    store = _store(tmp_path)
+    broker = ToolBroker.from_store(store, repo_root=tmp_path)
+    task = Task(title="ship it")
+
+    def build(tool: str, **args):
+        return broker.request(
+            CapabilityRequest(agent="Builder", tool=tool, task_id=task.id, args=args), task
+        )
+
+    (tmp_path / "f.py").write_text("X = 1\n", encoding="utf-8")
+    build("git.commit", message="first")
+
+    push_args = {"root": str(tmp_path), "remote": "origin", "branch": "main"}
+    first = build("git.push", **push_args)
+    assert first.status is CapabilityStatus.PENDING
+    pending_id = first.data["pending_id"]
+    # re-issuing while pending does not duplicate the queue entry
+    assert build("git.push", **push_args).status is CapabilityStatus.PENDING
+    assert [p.id for p in store.list_pending()] == [pending_id]
+
+    store.resolve_pending(pending_id, "approved")
+
+    allowed = build("git.push", **push_args)
+    assert allowed.status is CapabilityStatus.ALLOWED
+    # the bare remote now has the branch
+    refs = subprocess.run(
+        ["git", "branch", "--list", "main"], cwd=remote, capture_output=True, text=True
+    )
+    assert "main" in refs.stdout
+
+
 def test_write_outside_approved_root_raises(tmp_path) -> None:
     _init_repo(tmp_path)
     broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)

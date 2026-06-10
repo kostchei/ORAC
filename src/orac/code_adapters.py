@@ -15,7 +15,9 @@ from orac.tooling import ToolResult
 # help build the rest of itself (docs/roadmap.md Milestone A).
 
 READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status"})
-WRITE_TOOLS = frozenset({"repo.write_file", "git.create_branch", "git.commit"})
+WRITE_TOOLS = frozenset(
+    {"repo.write_file", "git.create_branch", "git.commit", "git.push"}
+)
 TEST_TOOLS = frozenset({"repo.run_tests"})
 CODE_TOOLS = READ_TOOLS | WRITE_TOOLS | TEST_TOOLS
 
@@ -40,6 +42,7 @@ class CodeAdapterSet:
             "repo.run_tests": self.run_tests,
             "git.create_branch": self.create_branch,
             "git.commit": self.commit,
+            "git.push": self.push,
             "git.status": self.status,
         }
 
@@ -166,6 +169,20 @@ class CodeAdapterSet:
             "git.commit",
             f"Committed {sha[:8]}: {message}",
             {"root": str(root), "sha": sha, "message": message},
+        )
+
+    def push(self, req: CapabilityRequest) -> ToolResult:
+        root = self._root_for(req.args.get("root"))
+        remote = req.args.get("remote", "origin")
+        push_args = ["push", remote]
+        branch = req.args.get("branch")
+        if branch:
+            push_args.append(branch)
+        proc = self._git(root, *push_args)
+        return ToolResult(
+            "git.push",
+            f"Pushed to {remote}.",
+            {"root": str(root), "remote": remote, "detail": proc.stderr.strip()},
         )
 
     # --- test adapter -----------------------------------------------------
