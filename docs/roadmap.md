@@ -53,14 +53,62 @@ Ordered; each step keeps the suite green.
       `execute_action`, …), its contract rules, and its kind-specific "done means".
       `run_goal_task` is the one runner for every kind; only `code` has a doer today — a goal in
       a doer-less kind blocks visibly, naming the missing capability group.
-- [ ] **`browser.verify_local_app`** — verification before a task may reach `done`.
+- [x] **P5 — LLM lenses (live-fire).** The three judgement lenses (Optimise/Simple/Efficiency)
+      reason over consequential edges on the resident local model (`lenses.py`), gated to
+      state-changing tools (`LLM_REVIEWED_TOOLS`); verdicts aggregate with the deterministic floor
+      unchanged. Calibrated and scored against curated cases (`orac lenses eval`), and verified end
+      to end on real LM Studio models (reasoning + clean-JSON). *(Moved up from Milestone B: the
+      cognition layer landed during the bootstrap rather than after it.)*
+- [x] **Review cockpit (the review-after surface).** `orac reviews` shows the queue — pending
+      approvals (each annotated with the lens verdict that parked it), completed actions awaiting
+      review, and recent lens verdicts (`--json` exports the lot for calibration). `orac approve` /
+      `deny` resolve parked requests (the loop resumes/blocks the task on its next tick); `orac ack`
+      accepts a completed action; `orac rollback <id> [--push]` git-reverts the recorded commit
+      under the `human` audit principal, then acks. `git.push` now records the pushed head sha +
+      branch so rollback has a target; a notification with no recorded sha fails closed.
+- [ ] **`browser.verify_local_app`** — verification before a task may reach `done` (see Build
+      order item 2 below).
 
 **Exit criterion for Milestone A:** idle ORAC picks a self-improvement task, branches, applies a
 patch, runs tests, and opens the change for human approval — end-to-end through the council, with
 the Builder as the only writer. **Status: the full circle runs in tests** (idle → originate →
 locked READY → Builder session builds on a branch with real files and passing tests → DONE →
-loop originates the next goal). Caveat: proven with a scripted model; quality with a live local
-model (LM Studio tool-format reliability) is the remaining unknown, not the machinery.
+loop originates the next goal), and the human side of "opens the change for human approval" now
+has a real surface (the review cockpit). Caveat: proven with a scripted model; quality with a
+live local model (LM Studio tool-format reliability) is the remaining unknown, not the machinery.
+
+---
+
+## Build order (next) — close the loop before widening it
+
+The recommended sequence to reach a daemon you can run unattended overnight. Foundation before
+breadth still holds: every item below hardens or completes the governance spine; no new surface
+category starts until item 4 has produced real evidence.
+
+1. **Safety-critical-file gate (design §8.7) — do this first.** Nothing currently stops a Builder
+   session from writing `policy.py`, `broker.py`, `council.py`, `scrum.py`, or the grant seed
+   (`prompts/agents.json`) under plain `auto + notify` — i.e. the autonomous loop can rewrite its
+   own governor or its own privilege boundary and you'd only see it *after*, in the review queue.
+   `policy.risk_class` already accepts `args` for exactly this arg-sensitive case: a write/commit
+   touching a safety-critical path escalates to a human (ESCALATE → the existing park/approve
+   machinery), even for the Builder. The review cockpit is its approval surface. Smallest item,
+   and it is the one hole a self-modifying loop can use against the operator. **Closes the last
+   open-decisions row blocking an unattended run.**
+2. **Verification before `done` — the last Milestone A checkbox.** Today a Builder session reaches
+   `done` on a self-reported "tests pass" in its summary. Make `run_goal_task` verify the kind's
+   own done-means independently before flipping `DONE` — for `code`, re-run the suite on the
+   claimed branch and refuse `done` if it is red (catches the most likely live-fire failure: a
+   local model declaring victory early). `browser.verify_local_app` is the frontend instance of
+   the same step and can follow, reusing the Playwright/CDP plumbing already in `browser_brain.py`.
+3. **P6 — notify transport + standing grants.** Notifications are durable rows but nothing pings a
+   human; the cockpit only answers when polled. With 1–2 in place the daemon can genuinely run
+   overnight, so the queue needs to reach the operator: a Windows toast (or `orac ui` surfacing the
+   unacked count — `ui_server.py` has no review-queue endpoints yet). Standing grants
+   (the fish-feeder case), rate-capped via `rate_counters`, belong to the same step and can trail.
+4. **Soak run, then choose the next surface.** The exit criterion's stated unknown is live-model
+   quality, not machinery. A few daemon-days with 1–3 in place generates the labelled escalation
+   data the lens-eval suite wants, and decides what earns the next slot: Group 2 (Communications,
+   blocked on the credential vault) or more Group 1 depth (`repo.apply_patch`, still deferred).
 
 ---
 
@@ -90,9 +138,9 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 
 | Decision | Blocks | Notes |
 | --- | --- | --- |
-| Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | Pick before `repo.apply_patch` / `repo.run_tests` land |
-| ESCALATE vs BLOCK semantics (design §8.3) | P3 | ESCALATE→pending, BLOCK→denied (proposed) |
-| Safety-critical-file gate (design §8.7) | P1/P4 | Edits to broker/policy/council/loop **and the grant seed** escalate to human even for the Builder |
+| Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | Local subprocess git/pytest chosen; `repo.apply_patch` still deferred (`repo.write_file` covers creation) |
+| ESCALATE vs BLOCK semantics (design §8.3) | P3 | **Settled:** ESCALATE→pending, BLOCK→denied |
+| Safety-critical-file gate (design §8.7) | unattended daemon run | **Promoted to Build-order item 1** (next): edits to broker/policy/council/loop **and the grant seed** escalate to human even for the Builder |
 | Credential vault | Group 2 | No real `channel.send` without it |
 | 60% band tolerance + reaction speed (design §8.6) | Optimise driver | Control-loop tuning, not a blocker for Milestone A |
 | Group 5 as separate epic | Group 5 | Workflow engine consuming the broker, not part of it |

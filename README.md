@@ -94,6 +94,25 @@ The model policy defaults to:
 
 When the daily foundational cap is exhausted, ORAC routes back to local models. When local CPU, memory, GPU, or VRAM use is high, ORAC chooses the smaller local model tier.
 
+## Review queue (review-after, not ask-before)
+
+ORAC's loop does not block on code work. Reversible local actions run immediately; a checkpoint-first commit or a push runs unattended and lands in a review queue ("I did X, here is the working result — ok?") rather than waiting for approval first. Approval-first parking is reserved for the genuinely irreversible (communications, financial, physical). The review surface is the cockpit for all of it:
+
+```powershell
+orac reviews                 # the queue: pending approvals, completed actions, recent lens verdicts
+orac reviews --all           # include acked actions and the full lens-verdict history
+orac reviews --json          # machine-readable (e.g. for lens calibration)
+
+orac approve <id>            # resolve a parked request; the loop resumes the task
+orac deny <id>               # resolve a parked request; the loop blocks the task
+
+orac ack <id>                # accept a completed action as ok (it stands as done)
+orac rollback <id>           # undo a completed action: git-revert its recorded commit, then ack
+orac rollback <id> --push    # also push the inverse commit to the action's remote
+```
+
+Each pending approval is shown with the council lens verdict that parked it, so you review a cause, not just a tool name. `rollback` only works when the action recorded a commit sha (e.g. `git.push`); an action with nothing to revert fails closed and asks you to undo it manually. Rollbacks are recorded in the same audit log as agent actions, under a `human` principal.
+
 ## LM Studio
 
 ORAC expects LM Studio's local OpenAI-compatible server at `http://localhost:1234/v1` by default. When ORAC starts, it starts the LM Studio server if the `lms` CLI is available. If a local model is already loaded, ORAC keeps it. If no model is loaded, ORAC checks available RAM and loads the largest suitable local model it can fit within the resource policy, preferring tool-use models when possible.
