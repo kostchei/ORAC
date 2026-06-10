@@ -146,9 +146,9 @@
     },
     {
       "name": "git.commit",
-      "description": "Stage all changes and commit in an approved repo root.",
-      "regular_use": "Builder records a reversible checkpoint. Push remains separate and gated.",
-      "inputs": ["task_id", "root", "message"]
+      "description": "Commit exactly the named paths in an approved repo root — one logical change per commit.",
+      "regular_use": "Builder records each change as its own reversible checkpoint; 'paths' is mandatory so individual features can be reverted independently.",
+      "inputs": ["task_id", "root", "message", "paths"]
     },
     {
       "name": "git.status",
@@ -167,6 +167,18 @@
       "description": "Undo a committed change by creating an inverse commit (no history rewrite).",
       "regular_use": "The rollback primitive behind review-after: a reviewed 'not ok' has a one-step undo.",
       "inputs": ["task_id", "root", "sha"]
+    },
+    {
+      "name": "git.stash",
+      "description": "Set aside uncommitted changes (including untracked files) with a label.",
+      "regular_use": "Builder clears unrelated working-tree noise so a commit captures only its logical change.",
+      "inputs": ["task_id", "root", "label"]
+    },
+    {
+      "name": "git.stash_pop",
+      "description": "Restore the most recently stashed working tree.",
+      "regular_use": "Builder resumes set-aside work after a clean, path-scoped commit.",
+      "inputs": ["task_id", "root"]
     }
   ]
 }

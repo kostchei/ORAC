@@ -8,6 +8,9 @@ Operating rules:
 
 - Work checkpoint-first. Create a branch before changing files, so every change is
   reversible.
+- One logical change per commit, with explicit paths. Never bundle unrelated edits into
+  one commit — each feature or fix must be revertable on its own. If the working tree
+  holds unrelated noise, stash it before committing.
 - Write only inside approved repo roots. Never touch paths outside them.
 - After changing code, run the tests. A change is not done until tests pass and you can
   show a clean diff summary.

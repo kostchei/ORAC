@@ -16,7 +16,15 @@ from orac.tooling import ToolResult
 
 READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status"})
 WRITE_TOOLS = frozenset(
-    {"repo.write_file", "git.create_branch", "git.commit", "git.push", "git.revert"}
+    {
+        "repo.write_file",
+        "git.create_branch",
+        "git.commit",
+        "git.push",
+        "git.revert",
+        "git.stash",
+        "git.stash_pop",
+    }
 )
 TEST_TOOLS = frozenset({"repo.run_tests"})
 CODE_TOOLS = READ_TOOLS | WRITE_TOOLS | TEST_TOOLS
@@ -44,6 +52,8 @@ class CodeAdapterSet:
             "git.commit": self.commit,
             "git.push": self.push,
             "git.revert": self.revert,
+            "git.stash": self.stash,
+            "git.stash_pop": self.stash_pop,
             "git.status": self.status,
         }
 
@@ -152,9 +162,22 @@ class CodeAdapterSet:
         )
 
     def commit(self, req: CapabilityRequest) -> ToolResult:
+        """Commit exactly the named paths — one logical change per commit.
+
+        ``paths`` is mandatory: fine-grained rollback (revert one feature,
+        keep the rest) only works if each commit contains a single change.
+        A sweep-everything commit is not possible through this adapter.
+        """
         root = self._root_for(req.args.get("root"))
         message = req.args["message"]
-        self._git(root, "add", "-A")
+        raw_paths = req.args.get("paths")
+        if not raw_paths:
+            raise ValueError(
+                "git.commit requires explicit 'paths' (one logical change per "
+                "commit); sweeping the whole tree is not allowed."
+            )
+        paths = [str(self._resolve_in_root(p)) for p in raw_paths]
+        self._git(root, "add", "--", *paths)
         self._git(
             root,
             "-c",
@@ -164,12 +187,35 @@ class CodeAdapterSet:
             "commit",
             "-m",
             message,
+            "--",
+            *paths,
         )
         sha = self._git(root, "rev-parse", "HEAD").stdout.strip()
         return ToolResult(
             "git.commit",
-            f"Committed {sha[:8]}: {message}",
-            {"root": str(root), "sha": sha, "message": message},
+            f"Committed {sha[:8]} ({len(paths)} path(s)): {message}",
+            {"root": str(root), "sha": sha, "message": message, "paths": paths},
+        )
+
+    def stash(self, req: CapabilityRequest) -> ToolResult:
+        """Set aside uncommitted noise so a commit captures only its change."""
+        root = self._root_for(req.args.get("root"))
+        label = req.args.get("label", "orac-builder")
+        proc = self._git(root, "stash", "push", "--include-untracked", "-m", label)
+        stashed = "No local changes" not in proc.stdout
+        return ToolResult(
+            "git.stash",
+            f"Stashed working tree as {label!r}." if stashed else "Nothing to stash.",
+            {"root": str(root), "label": label, "stashed": stashed},
+        )
+
+    def stash_pop(self, req: CapabilityRequest) -> ToolResult:
+        root = self._root_for(req.args.get("root"))
+        self._git(root, "stash", "pop")
+        return ToolResult(
+            "git.stash_pop",
+            "Restored stashed working tree.",
+            {"root": str(root)},
         )
 
     def revert(self, req: CapabilityRequest) -> ToolResult:

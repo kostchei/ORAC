@@ -61,6 +61,9 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "git.push": RiskClass(Reversibility.HARD, Externality.EXTERNAL_PRIVATE),
     # Revert creates a new commit undoing a previous one: the rollback primitive.
     "git.revert": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # Stash push/pop set aside and restore uncommitted work: local, reversible.
+    "git.stash": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "git.stash_pop": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
 }
 
 
