@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import orac.browser_brain as bb
-from orac.browser_brain import BrowserFoundationBrain, _extract_new_text
+from orac.browser_brain import (
+    BrowserFoundationBrain,
+    _extract_new_text,
+    cdp_reachable,
+    ensure_browser_foundation_ready,
+)
 from orac.llm import build_brain, FallbackBrain
 from orac.model_policy import DEFAULT_POLICY, ModelPolicyStore, can_escalate, session_brain_for
 from orac.models import Board, Task, TaskStatus
@@ -308,3 +313,91 @@ def test_decide_prefers_api_key_over_browser(tmp_path, monkeypatch) -> None:
     store.init()
     decision = ModelPolicyStore(store).decide()
     assert decision.brain == "foundation"
+
+
+# ---------------------------------------------------------------------------
+# ensure_browser_foundation_ready startup logic
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_ready_already_running(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(bb, "cdp_reachable", lambda _url: True)
+    policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
+    result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
+    assert result["ok"] is True
+    assert result["action"] == "already_running"
+
+
+def test_ensure_ready_chrome_not_found(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(bb, "cdp_reachable", lambda _url: False)
+    monkeypatch.setattr(bb, "find_chrome", lambda: None)
+    policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
+    result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
+    assert result["ok"] is False
+    assert result["action"] == "chrome_not_found"
+
+
+def test_ensure_ready_launches_chrome(tmp_path, monkeypatch) -> None:
+    # First call (before launch): unreachable. Subsequent calls: reachable.
+    call_count: list[int] = [0]
+
+    def _reachable(_url: str) -> bool:
+        call_count[0] += 1
+        return call_count[0] > 1
+
+    launched: list[tuple] = []
+
+    def _launch(chrome_path: str, port: int, profile_dir: object) -> None:
+        launched.append((chrome_path, port))
+
+    monkeypatch.setattr(bb, "cdp_reachable", _reachable)
+    monkeypatch.setattr(bb, "find_chrome", lambda: "/usr/bin/chromium")
+    monkeypatch.setattr(bb, "launch_chrome", _launch)
+    monkeypatch.setattr(bb.time, "sleep", lambda _n: None)
+
+    policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
+    result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
+
+    assert result["ok"] is True
+    assert result["action"] == "launched"
+    assert launched[0] == ("/usr/bin/chromium", 9222)
+    assert (tmp_path / ".orac" / "chrome-profile").is_dir()
+
+
+def test_ensure_ready_launch_timeout(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(bb, "cdp_reachable", lambda _url: False)
+    monkeypatch.setattr(bb, "find_chrome", lambda: "/usr/bin/chromium")
+    monkeypatch.setattr(bb, "launch_chrome", lambda *_a, **_kw: None)
+    monkeypatch.setattr(bb.time, "sleep", lambda _n: None)
+
+    policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
+    result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
+    assert result["ok"] is False
+    assert result["action"] == "launch_timeout"
+
+
+def test_ensure_ready_playwright_missing_triggers_install(tmp_path, monkeypatch) -> None:
+    # Simulate playwright not installed.
+    import builtins
+    real_import = builtins.__import__
+
+    def mock_import(name: str, *args, **kwargs):  # type: ignore[override]
+        if name == "playwright":
+            raise ImportError("no module named playwright")
+        return real_import(name, *args, **kwargs)
+
+    install_called: list[bool] = []
+
+    def fake_install():
+        from orac.dependency_installer import InstallResult
+        install_called.append(True)
+        return InstallResult(ok=True, command=[], output="installed")
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+    monkeypatch.setattr("orac.dependency_installer.install_playwright", fake_install)
+    monkeypatch.setattr(bb, "cdp_reachable", lambda _url: True)
+
+    policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
+    result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
+    assert install_called
+    assert result["ok"] is True

@@ -4,6 +4,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from orac.browser_brain import ensure_browser_foundation_ready
 from orac.llm import build_brain
 from orac.model_policy import ModelPolicyStore
 from orac.scrum import Scrum
@@ -23,6 +24,10 @@ class DaemonTick:
 def run_daemon(root: Path | str = ".", interval_seconds: int = 60, cycles: int = 1) -> None:
     store = BoardStore(root)
     store.init()
+    policy = ModelPolicyStore(store).load_policy()
+    if policy.get("browser_foundation_provider"):
+        result = ensure_browser_foundation_ready(policy, orac_root=root)
+        print(f"Browser foundation: {result.get('action')} — {result.get('message', '')}")
     print(f"ORAC daemon running every {interval_seconds}s. Press Ctrl+C to stop.")
     while True:
         tick = run_daemon_tick(store, cycles=cycles)

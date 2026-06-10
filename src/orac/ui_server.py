@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
+from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
 from orac.dependency_installer import install_audio_stack
 from orac.llm import build_brain
 from orac.model_policy import ModelPolicyStore, ensure_lmstudio_model_loaded, lmstudio_loaded_models
@@ -28,17 +29,29 @@ def run_ui(root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) ->
     handler = _make_handler(store, runtime)
     server = ThreadingHTTPServer((host, port), handler)
     print(f"ORAC UI listening on http://{host}:{port}")
+    policy = policy_store.load_policy()
     threading.Thread(
         target=_autoload_lmstudio_model,
-        args=(policy_store.load_policy(),),
+        args=(policy,),
         daemon=True,
     ).start()
+    if policy.get("browser_foundation_provider"):
+        threading.Thread(
+            target=_autostart_browser_foundation,
+            args=(policy, store.root),
+            daemon=True,
+        ).start()
     server.serve_forever()
 
 
 def _autoload_lmstudio_model(policy: dict[str, Any]) -> None:
     result = ensure_lmstudio_model_loaded(policy)
     print(f"LM Studio startup: {result.get('action')} {result.get('message', '')}")
+
+
+def _autostart_browser_foundation(policy: dict[str, Any], root: Path) -> None:
+    result = ensure_browser_foundation_ready(policy, orac_root=root)
+    print(f"Browser foundation startup: {result.get('action')} {result.get('message', '')}")
 
 
 class UIRuntime:
@@ -119,6 +132,15 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
             if self.path == "/api/models/loaded":
                 self._send_json({"models": lmstudio_loaded_models()})
                 return
+            if self.path == "/api/browser/status":
+                policy = ModelPolicyStore(store).load_policy()
+                cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
+                self._send_json({
+                    "provider": str(policy.get("browser_foundation_provider", "")),
+                    "cdp_url": cdp_url,
+                    "connected": cdp_reachable(cdp_url),
+                })
+                return
             if self.path == "/api/audio/devices":
                 self._send_json(audio_status().to_dict())
                 return
@@ -178,6 +200,11 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                 current.update(payload)
                 policy_store.save_policy(current)
                 self._send_json(policy_store.load_policy())
+                return
+            if self.path == "/api/browser/launch":
+                policy = ModelPolicyStore(store).load_policy()
+                result = ensure_browser_foundation_ready(policy, orac_root=store.root)
+                self._send_json(result, status=200 if result.get("ok") else 500)
                 return
             if self.path == "/api/loop/start":
                 runtime.start()

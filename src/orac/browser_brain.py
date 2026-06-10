@@ -2,11 +2,31 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from orac.models import Task
+
+# Windows chrome/edge candidates (checked in order when PATH lookup fails).
+_CHROME_WIN_CANDIDATES: list[str] = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"
+    ),
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", ""), r"Microsoft\Edge\Application\msedge.exe"
+    ),
+]
 
 # Provider configuration -------------------------------------------------------
 
@@ -206,3 +226,149 @@ def _extract_new_text(before: str, after: str) -> str:
         tail = after[idx + len(anchor):]
         return tail.strip()
     return after[len(before):].strip()
+
+
+# ---------------------------------------------------------------------------
+# Application startup helpers
+# ---------------------------------------------------------------------------
+
+
+def cdp_reachable(cdp_url: str = "http://localhost:9222") -> bool:
+    """Return True if a Chrome DevTools endpoint is listening at *cdp_url*."""
+    try:
+        req = Request(f"{cdp_url.rstrip('/')}/json/version")
+        with urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except (OSError, URLError):
+        return False
+
+
+def find_chrome() -> str | None:
+    """Return the path to a Chrome or Edge executable, or None if not found."""
+    for name in ("google-chrome", "google-chrome-stable", "chromium",
+                 "chromium-browser", "chrome", "msedge"):
+        path = shutil.which(name)
+        if path:
+            return path
+    if sys.platform == "win32":
+        for candidate in _CHROME_WIN_CANDIDATES:
+            expanded = os.path.expandvars(candidate)
+            if os.path.exists(expanded):
+                return expanded
+    return None
+
+
+def launch_chrome(chrome_path: str, cdp_port: int, profile_dir: Path) -> None:
+    """Launch Chrome/Edge with the CDP debug port and a dedicated ORAC profile.
+
+    The process is detached so it outlives the ORAC daemon.
+    """
+    args = [
+        chrome_path,
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(args, **kwargs)
+
+
+def ensure_browser_foundation_ready(
+    policy: dict[str, Any],
+    orac_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Ensure playwright is installed and Chrome is reachable via CDP.
+
+    Called once at daemon/UI startup when ``browser_foundation_provider`` is
+    set.  Launches Chrome into a persistent ORAC-owned profile
+    (``{orac_root}/.orac/chrome-profile``) so that provider logins survive
+    restarts.  The user needs to log in once in the opened browser window;
+    subsequent starts reconnect automatically.
+
+    Returns a status dict with ``ok``, ``action``, and ``message`` keys.
+    """
+    # 1. Ensure playwright is importable; install if missing.
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        from orac.dependency_installer import install_playwright  # noqa: PLC0415
+
+        result = install_playwright()
+        if not result.ok:
+            return {
+                "ok": False,
+                "action": "playwright_install_failed",
+                "message": result.output[-500:],
+            }
+
+    # 2. CDP already running — nothing to do.
+    cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
+    if cdp_reachable(cdp_url):
+        return {
+            "ok": True,
+            "action": "already_running",
+            "message": "Chrome CDP already reachable.",
+        }
+
+    # 3. Find the Chrome / Edge executable.
+    chrome = find_chrome()
+    if not chrome:
+        return {
+            "ok": False,
+            "action": "chrome_not_found",
+            "message": (
+                "No Chrome or Edge executable found.  Install Chrome, or add it to PATH."
+            ),
+        }
+
+    # 4. Build the profile directory (persists logins between restarts).
+    root = Path(orac_root) if orac_root else Path(".")
+    profile_dir = root / ".orac" / "chrome-profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        cdp_port = _port_from_cdp_url(cdp_url)
+        launch_chrome(chrome, cdp_port, profile_dir)
+    except OSError as exc:
+        return {"ok": False, "action": "launch_failed", "message": str(exc)}
+
+    # 5. Wait up to 15 s for the CDP endpoint to come up.
+    for _ in range(15):
+        time.sleep(1.0)
+        if cdp_reachable(cdp_url):
+            provider = str(policy.get("browser_foundation_provider", ""))
+            return {
+                "ok": True,
+                "action": "launched",
+                "message": (
+                    f"Chrome launched (provider={provider}, port={cdp_port}).  "
+                    f"Log in at the opened browser window if this is the first run.  "
+                    f"Profile: {profile_dir}"
+                ),
+                "profile_dir": str(profile_dir),
+            }
+
+    return {
+        "ok": False,
+        "action": "launch_timeout",
+        "message": (
+            f"Chrome was launched but CDP did not come up on {cdp_url} within 15 s.  "
+            "Check that no other Chrome instance owns that port."
+        ),
+    }
+
+
+def _port_from_cdp_url(url: str) -> int:
+    try:
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        return int(urlparse(url).port or 9222)
+    except Exception:  # noqa: BLE001
+        return 9222
