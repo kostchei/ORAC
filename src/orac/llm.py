@@ -132,7 +132,14 @@ class OpenAICompatibleBrain:
         if not choices:
             return ""
         message = choices[0].get("message", {})
-        return str(message.get("content", "")).strip()
+        content = str(message.get("content") or "").strip()
+        if not content:
+            # Reasoning models (e.g. qwen3) under strict structured output place
+            # the schema-constrained answer in reasoning_content and leave
+            # content empty. Read it rather than return "" — an empty reply
+            # looks like a failed call and trips the availability fallback.
+            content = str(message.get("reasoning_content") or "").strip()
+        return content
 
 
 @dataclass

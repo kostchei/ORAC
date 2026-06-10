@@ -121,12 +121,20 @@ class AgentSession:
                     ),
                 )
             args = decision.get("args") or {}
-            result = self.broker.request(
-                CapabilityRequest(
-                    agent=self.profile.name, tool=str(tool), task_id=task.id, args=dict(args)
-                ),
-                task,
-            )
+            try:
+                result = self.broker.request(
+                    CapabilityRequest(
+                        agent=self.profile.name, tool=str(tool), task_id=task.id, args=dict(args)
+                    ),
+                    task,
+                )
+            except Exception as exc:  # noqa: BLE001 — a tool fault is feedback, not a crash
+                # An adapter that raises (bad path, missing file, git error) is an
+                # observation the model adapts to, not a loop-killing crash. The
+                # session stays bounded by max_steps.
+                self.transcript.append(f"ACTION {step}: {tool} {json.dumps(dict(args))[:400]}")
+                self.transcript.append(f"OBSERVATION {step} [error]: {type(exc).__name__}: {exc}")
+                continue
             if result.status is CapabilityStatus.PENDING:
                 return SessionResult(
                     status="pending",

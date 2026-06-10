@@ -272,6 +272,27 @@ def test_stash_isolates_unrelated_noise_from_a_commit(tmp_path) -> None:
     assert any("noise.py" in line for line in leftover)
 
 
+def test_relative_write_path_resolves_against_repo_root(tmp_path) -> None:
+    # The agent names paths relative to its repo; they must land in the repo
+    # root, not the process cwd.
+    _init_repo(tmp_path)
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+    task = Task(title="relative write")
+
+    result = broker.request(
+        CapabilityRequest(
+            agent="Builder",
+            tool="repo.write_file",
+            task_id=task.id,
+            args={"path": "pkg/mod.py", "content": "VALUE = 1\n"},
+        ),
+        task,
+    )
+
+    assert result.status is CapabilityStatus.ALLOWED
+    assert (tmp_path / "pkg" / "mod.py").read_text() == "VALUE = 1\n"
+
+
 def test_write_outside_approved_root_raises(tmp_path) -> None:
     _init_repo(tmp_path)
     broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)

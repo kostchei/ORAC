@@ -60,7 +60,13 @@ class CodeAdapterSet:
     # --- path guards ------------------------------------------------------
 
     def _resolve_in_root(self, raw: str) -> Path:
-        path = Path(raw).resolve()
+        candidate = Path(raw)
+        if not candidate.is_absolute() and len(self.approved_roots) == 1:
+            # The agent names paths relative to its repo, not the process cwd.
+            # Resolve them against the approved root so a bare "mod.py" lands in
+            # the repo, not wherever ORAC happens to be running from.
+            candidate = self.approved_roots[0] / candidate
+        path = candidate.resolve()
         for root in self.approved_roots:
             if path == root or root in path.parents:
                 return path

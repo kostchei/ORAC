@@ -57,6 +57,29 @@ def test_session_uses_structured_output_when_brain_supports_it(tmp_path) -> None
     assert brain.schemas == [DECISION_SCHEMA]  # schema enforced server-side
 
 
+def test_lmstudio_reads_reasoning_content_when_content_is_empty(monkeypatch) -> None:
+    # Reasoning models (e.g. qwen3) place the structured answer in
+    # reasoning_content and leave content empty; the brain must read it.
+    import orac.llm as llm
+
+    class _FakeResp:
+        def __init__(self, payload): self._b = json.dumps(payload).encode()
+        def read(self): return self._b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    payload = {
+        "choices": [
+            {"message": {"content": "", "reasoning_content": '{"tool":"git.status","args":{}}'}}
+        ]
+    }
+    monkeypatch.setattr(llm, "urlopen", lambda req, timeout=0: _FakeResp(payload))
+
+    out = llm.LMStudioBrain().think("Builder", "builder", Task(title="x"), "go")
+
+    assert out == '{"tool":"git.status","args":{}}'
+
+
 def test_model_for_work_kind_uses_slots() -> None:
     policy = dict(DEFAULT_POLICY)
     policy.update(
@@ -210,7 +233,19 @@ def test_local_retries_once_before_browser_escalation(tmp_path, monkeypatch) -> 
         metadata={"goal": "do something local cannot"},
     )
     board = Board(tasks=[task])
-    # LMStudio unreachable → FallbackBrain → RulesBrain prose → unparseable → blocked.
+
+    # Force the doer session to fail deterministically, independent of whether a
+    # real LM Studio is reachable: the routed brain always returns a blocked
+    # decision. (Escalation keys off session failure, not the brain's identity.)
+    import orac.model_policy as model_policy
+
+    monkeypatch.setattr(
+        model_policy,
+        "session_brain_for",
+        lambda policy_store, t: StructuredScriptedBrain(
+            [json.dumps({"blocked": True, "reason": "local cannot"})]
+        ),
+    )
     scrum = Scrum(brain=None, root=tmp_path, route_models=True)
 
     # First failure: should retry locally, NOT escalate yet.
@@ -227,15 +262,6 @@ def test_local_retries_once_before_browser_escalation(tmp_path, monkeypatch) -> 
     assert task.status == TaskStatus.READY
 
     # Third failure (browser also blocked) → stays BLOCKED for human.
-    import orac.model_policy as model_policy
-
-    monkeypatch.setattr(
-        model_policy,
-        "session_brain_for",
-        lambda policy_store, t: StructuredScriptedBrain(
-            [json.dumps({"blocked": True, "reason": "browser also failed"})]
-        ),
-    )
     scrum.run(board, cycles=1)
     assert task.status == TaskStatus.BLOCKED
 

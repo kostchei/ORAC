@@ -99,6 +99,27 @@ def test_session_denial_is_an_observation_the_model_adapts_to(tmp_path) -> None:
     assert "denied" in brain.prompts[-1]  # the refusal reached the model as an observation
 
 
+def test_session_treats_a_tool_exception_as_an_observation(tmp_path) -> None:
+    broker, _ = _setup(tmp_path)
+    # Writing outside the approved root raises PermissionError in the adapter.
+    # The session must observe it and let the model adapt, not crash the loop.
+    outside = str(tmp_path.parent / "escape.py")
+    brain = ScriptedBrain(
+        [
+            json.dumps({"tool": "repo.write_file", "args": {"path": outside, "content": "x"}}),
+            json.dumps({"blocked": True, "reason": "cannot write outside the repo"}),
+        ]
+    )
+    task = Task(title="adapt", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: anything."
+    )
+
+    assert result.status == "blocked"
+    assert "PermissionError" in brain.prompts[-1]  # the fault reached the model
+
+
 def test_session_unparseable_reply_blocks_without_crashing(tmp_path) -> None:
     broker, _ = _setup(tmp_path)
     brain = ScriptedBrain(["I think I should probably create a branch first?"])
