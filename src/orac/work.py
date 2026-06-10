@@ -7,7 +7,13 @@ from orac.agent_registry import load_agent_profiles
 from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
 from orac.llm import Brain
-from orac.models import Board, Task, TaskStatus
+from orac.models import (
+    Board,
+    CapabilityRequest,
+    CapabilityStatus,
+    Task,
+    TaskStatus,
+)
 
 # The general work model. A goal task carries a work kind; each kind names its
 # sole doer (the §4.6 invariant generalised: one writer per category of
@@ -26,6 +32,10 @@ class WorkKindSpec:
     doer_slug: str | None          # sole doer role; None = no doer exists yet
     done_means: str                # what verification looks like for this kind
     contract_rules: str            # working rules injected into the contract
+    # How the kind's done-means is independently confirmed before DONE. None =
+    # no verifier yet; a kind cannot have a doer without one (the doer can claim
+    # done, so something other than the doer must check it). Enforced below.
+    verifier: str | None = None
 
 
 CONTRACT_TEMPLATE = """\
@@ -55,6 +65,7 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
             "- One logical change per commit, with explicit paths.\n"
             "- Run the tests; you are not done until they pass."
         ),
+        verifier="run_tests",  # re-run the suite on the built branch; red => not done
     ),
     "comms": WorkKindSpec(
         kind="comms",
@@ -107,6 +118,15 @@ def run_goal_task(
     except KeyError as exc:
         raise ValueError(f"Unknown work kind {work_kind!r}.") from exc
 
+    # A kind with a doer must also declare how its done-means is verified: the
+    # doer claims done, so something other than the doer must confirm it. A doer
+    # without a verifier is a design hole, surfaced loudly rather than trusted.
+    if spec.doer_slug is not None and spec.verifier is None:
+        raise ValueError(
+            f"work kind {spec.kind!r} has a doer but no verifier; a doer that can "
+            "claim done needs an independent check before DONE is granted."
+        )
+
     child = Task(
         title=f"[{spec.kind}] {goal}",
         description=goal,
@@ -148,8 +168,29 @@ def run_goal_task(
     result = session.run(child, contract)
 
     if result.status == "done":
-        child.transition(TaskStatus.DONE)
-        parent.add_log("Orchestrator", f"{spec.kind} subtask {child.id} done: {result.summary}")
+        # Generation is cheap, verification is scarce: the doer's self-reported
+        # "done" is a claim, not proof. Independently confirm the kind's
+        # done-means before granting DONE; a failed or unrunnable check blocks
+        # the task rather than trusting the summary (most likely live-fire
+        # failure: a local model declaring victory with red or unrun tests).
+        ok, detail = verify_goal_done(spec, child, broker, context)
+        if ok:
+            child.transition(TaskStatus.DONE)
+            parent.add_log(
+                "Orchestrator",
+                f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
+            )
+        else:
+            child.add_log(
+                doer.name, f"Claimed done, but verification failed: {detail}"
+            )
+            child.transition(TaskStatus.BLOCKED)
+            parent.transition(TaskStatus.BLOCKED)
+            parent.add_log(
+                "Orchestrator",
+                f"{spec.kind} subtask {child.id} blocked: claimed done but "
+                f"verification failed: {detail}",
+            )
     elif result.status == "pending":
         child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
         parent.add_log(
@@ -161,3 +202,54 @@ def run_goal_task(
         parent.transition(TaskStatus.BLOCKED)
         parent.add_log("Orchestrator", f"{spec.kind} subtask {child.id} blocked: {result.summary}")
     return child
+
+
+# Verifier name -> how it confirms a kind's done-means. The check runs through
+# the broker (audited, no privileged path) as the doer agent.
+def verify_goal_done(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Independently confirm the kind's done-means. Returns (ok, detail).
+
+    Only invoked when a doer session claimed done, so ``spec.verifier`` is set
+    (the doer/verifier invariant is enforced at spawn). An unknown verifier name
+    is a configuration fault, not a silent pass.
+    """
+    if spec.verifier == "run_tests":
+        return _verify_run_tests(spec, child, broker, context)
+    raise ValueError(
+        f"work kind {spec.kind!r} names unknown verifier {spec.verifier!r}."
+    )
+
+
+def _verify_run_tests(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    repo_root = context.get("repo_root")
+    if not repo_root:
+        return False, "no repo_root in context to run the suite against"
+    doer = WORK_KINDS[spec.kind].doer_slug
+    profiles = {profile.slug: profile for profile in load_agent_profiles()}
+    agent_name = profiles[doer].name if doer in profiles else "Builder"
+    result = broker.request(
+        CapabilityRequest(
+            agent=agent_name,
+            tool="repo.run_tests",
+            task_id=child.id,
+            args={"root": str(repo_root)},
+        ),
+        child,
+    )
+    if result.status is not CapabilityStatus.ALLOWED:
+        return False, f"could not run tests ({result.status.value}): {result.message}"
+    passed = bool(result.data.get("passed"))
+    summary = str(result.data.get("summary", "")).strip()[-500:]
+    if passed:
+        return True, "tests passed"
+    return False, summary or "tests failed"

@@ -95,12 +95,16 @@ category starts until item 4 has produced real evidence.
    approval surface. Path matching is suffix-on-boundary so relative and absolute (Windows or
    POSIX) forms both match while lookalikes do not. **Closed the last open-decisions row blocking
    an unattended run.**
-2. **Verification before `done` — the last Milestone A checkbox.** Today a Builder session reaches
-   `done` on a self-reported "tests pass" in its summary. Make `run_goal_task` verify the kind's
-   own done-means independently before flipping `DONE` — for `code`, re-run the suite on the
-   claimed branch and refuse `done` if it is red (catches the most likely live-fire failure: a
-   local model declaring victory early). `browser.verify_local_app` is the frontend instance of
-   the same step and can follow, reusing the Playwright/CDP plumbing already in `browser_brain.py`.
+2. **Verification before `done`.** **Done (general case).** `run_goal_task` no longer trusts a
+   doer session's self-reported "done": it calls `verify_goal_done`, which confirms the kind's
+   own done-means independently before flipping `DONE`. For `code` the verifier (`run_tests`)
+   re-runs the suite through the broker on the built branch and refuses `done` if it is red or
+   unrunnable — the task blocks with the failure detail instead (catches the most likely live-fire
+   failure: a local model declaring victory early). A `WorkKindSpec.verifier` field carries the
+   check, and a doer-bearing kind without a verifier now raises at spawn (a doer can claim done,
+   so something else must confirm it). **Remaining:** `browser.verify_local_app` — the frontend
+   instance of the same step (reuse `browser_brain.py`'s Playwright/CDP plumbing); this is the
+   last open Milestone A checkbox.
 3. **P6 — notify transport + standing grants.** Notifications are durable rows but nothing pings a
    human; the cockpit only answers when polled. With 1–2 in place the daemon can genuinely run
    overnight, so the queue needs to reach the operator: a Windows toast (or `orac ui` surfacing the
