@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from orac.models import Externality, Reversibility, RiskClass
@@ -119,3 +120,71 @@ def approval_mode(risk: RiskClass) -> ApprovalMode:
 def approval_mode_for(tool: str, args: dict[str, Any] | None = None) -> ApprovalMode:
     """Convenience: classify then look up the mode in one call."""
     return approval_mode(risk_class(tool, args))
+
+
+# --- safety-critical-file gate (design §8.7) --------------------------------
+#
+# The files that *enforce* the safety model are a different class from ordinary
+# code. Editing them is the system rewriting its own governor or its own
+# privilege boundary (§4.6 grant seed). A loop that can weaken its own brakes —
+# or grant itself new powers — must not run that change under auto+notify, even
+# though it is reversible by checkpoint. Such an edit escalates to a human
+# regardless of reversibility; the council's deterministic floor reads this
+# predicate and turns a match into an ESCALATE (the existing park/approve path).
+#
+# Paths are repo-root-relative, POSIX-style. Matching is suffix-on-boundary so
+# both the relative form the agent names ("src/orac/policy.py") and the absolute
+# form the adapter resolves it to ("D:/Code/ORAC/src/orac/policy.py") match,
+# while a lookalike ("notsrc/orac/policy.py") does not.
+SAFETY_CRITICAL_PATHS: frozenset[str] = frozenset(
+    {
+        "src/orac/broker.py",        # the broker: the single enforcement edge
+        "src/orac/broker_store.py",  # durable grants/audit/pending/notifications
+        "src/orac/policy.py",        # the risk model + this gate itself
+        "src/orac/council.py",       # the deterministic review floor
+        "src/orac/lenses.py",        # the LLM cognition layer
+        "src/orac/scrum.py",         # the loop that parks/resumes on approval
+        "src/orac/daemon.py",        # the 24/7 driver wiring
+        "src/orac/agent_session.py", # the agent loop the broker adjudicates
+        "src/orac/prompts/agents.json",  # the grant seed: who-can-write (§4.6)
+    }
+)
+
+# Tool -> the arg key holding the path(s) it would write/commit. A safety-critical
+# match on any of these escalates. Reads/searches/status are not listed: only a
+# mutation of the governor is gated, not looking at it.
+_PATH_BEARING_TOOLS: dict[str, str] = {
+    "repo.write_file": "path",   # the mutation itself
+    "git.commit": "paths",       # making the change durable (list of paths)
+}
+
+
+def _normalise(raw: str) -> str:
+    return Path(raw).as_posix()
+
+
+def _matches_critical(raw: str) -> bool:
+    posix = _normalise(raw)
+    return any(
+        posix == critical or posix.endswith("/" + critical)
+        for critical in SAFETY_CRITICAL_PATHS
+    )
+
+
+def safety_critical_paths_touched(
+    tool: str, args: dict[str, Any] | None
+) -> list[str]:
+    """Return the safety-critical path(s) a write/commit would touch, else [].
+
+    Deterministic and store-free: it needs only the request, so it works on the
+    no-DB path too. The council's Sentinel lens calls this; a non-empty result
+    means the edge escalates to a human (design §8.7).
+    """
+    key = _PATH_BEARING_TOOLS.get(tool)
+    if key is None or not args:
+        return []
+    raw = args.get(key)
+    if raw is None:
+        return []
+    candidates = raw if isinstance(raw, (list, tuple)) else [raw]
+    return [str(p) for p in candidates if _matches_critical(str(p))]

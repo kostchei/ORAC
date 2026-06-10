@@ -85,15 +85,16 @@ The recommended sequence to reach a daemon you can run unattended overnight. Fou
 breadth still holds: every item below hardens or completes the governance spine; no new surface
 category starts until item 4 has produced real evidence.
 
-1. **Safety-critical-file gate (design §8.7) — do this first.** Nothing currently stops a Builder
-   session from writing `policy.py`, `broker.py`, `council.py`, `scrum.py`, or the grant seed
-   (`prompts/agents.json`) under plain `auto + notify` — i.e. the autonomous loop can rewrite its
-   own governor or its own privilege boundary and you'd only see it *after*, in the review queue.
-   `policy.risk_class` already accepts `args` for exactly this arg-sensitive case: a write/commit
-   touching a safety-critical path escalates to a human (ESCALATE → the existing park/approve
-   machinery), even for the Builder. The review cockpit is its approval surface. Smallest item,
-   and it is the one hole a self-modifying loop can use against the operator. **Closes the last
-   open-decisions row blocking an unattended run.**
+1. ~~**Safety-critical-file gate (design §8.7).**~~ **Done.** `policy.SAFETY_CRITICAL_PATHS` +
+   `safety_critical_paths_touched(tool, args)` classify a write/commit touching the files that
+   enforce the safety model (`broker.py`, `broker_store.py`, `policy.py`, `council.py`,
+   `lenses.py`, `scrum.py`, `daemon.py`, `agent_session.py`, and the grant seed
+   `prompts/agents.json`). The council's deterministic **Sentinel** lens turns a match into an
+   ESCALATE → the existing park/approve machinery, even for the Builder, regardless of
+   reversibility; a human approval of the exact request clears it. The review cockpit is its
+   approval surface. Path matching is suffix-on-boundary so relative and absolute (Windows or
+   POSIX) forms both match while lookalikes do not. **Closed the last open-decisions row blocking
+   an unattended run.**
 2. **Verification before `done` — the last Milestone A checkbox.** Today a Builder session reaches
    `done` on a self-reported "tests pass" in its summary. Make `run_goal_task` verify the kind's
    own done-means independently before flipping `DONE` — for `code`, re-run the suite on the

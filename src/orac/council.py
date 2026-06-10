@@ -14,6 +14,7 @@ from orac.models import (
     ReviewContext,
     TaskStatus,
 )
+from orac.policy import safety_critical_paths_touched
 
 if TYPE_CHECKING:
     from orac.lenses import LensReviewer
@@ -63,6 +64,7 @@ class Council:
             self._optimise(ctx),
             self._simples(ctx),
             self._efficiency(ctx),
+            self._sentinel(ctx),
         ]
         if self.llm is not None and self.llm.applies(ctx):
             verdicts.extend(self.llm.review(ctx))
@@ -148,3 +150,27 @@ class Council:
                 f"on task {ctx.request.task_id}; duplicate work.",
             )
         return LensVerdict(lens="Efficiency", decision=LensDecision.PASS, reason="no duplicate")
+
+    def _sentinel(self, ctx: ReviewContext) -> LensVerdict:
+        """Self-modification guard (design §8.7): a write or commit touching the
+        files that enforce the safety model escalates to a human even for the
+        Builder, regardless of reversibility — the system must not weaken its own
+        brakes or widen its own privileges under auto+notify.
+
+        Deterministic and store-free, so it holds on the no-DB path too. Once a
+        human approves the exact request, the durable approval clears it (the
+        broker's ``_check_approval`` short-circuits the re-issued call), so the
+        guard escalates without trapping the work forever.
+        """
+        touched = safety_critical_paths_touched(ctx.request.tool, ctx.request.args)
+        if touched:
+            return LensVerdict(
+                lens="Sentinel",
+                decision=LensDecision.ESCALATE,
+                reason=f"Sentinel: {ctx.request.tool} would modify safety-critical "
+                f"file(s) {touched}; self-modification of the governor or grant "
+                "seed needs human approval regardless of reversibility.",
+            )
+        return LensVerdict(
+            lens="Sentinel", decision=LensDecision.PASS, reason="no safety-critical path"
+        )
