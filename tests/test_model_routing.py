@@ -109,6 +109,64 @@ def test_lens_brain_uses_small_slot_with_structured_output(tmp_path) -> None:
     assert callable(getattr(brain, "think_json", None))  # lenses need structured output
 
 
+def test_verify_model_slots_passes_when_configured_models_are_loadable(tmp_path, monkeypatch) -> None:
+    from orac.model_policy import verify_model_slots
+
+    store = BoardStore(tmp_path)
+    store.init()
+    policy_store = ModelPolicyStore(store)
+    policy_store.save_policy(
+        {"lmstudio_standard_model": "mistral-small-3.1-24b-instruct-2503",
+         "lmstudio_small_model": "gemma-4-12b"}  # bare; served id is google/gemma-4-12b
+    )
+    monkeypatch.setattr(
+        "orac.model_policy.lmstudio_models",
+        lambda base_url="x": ["mistral-small-3.1-24b-instruct-2503", "google/gemma-4-12b"],
+    )
+    monkeypatch.setattr("orac.model_policy.lmstudio_available_model_records", lambda: [])
+
+    report = verify_model_slots(policy_store)
+
+    assert report["checked"] is True
+    assert report["ok"] is True
+    assert report["missing"] == {}
+
+
+def test_verify_model_slots_flags_a_stale_slot(tmp_path, monkeypatch) -> None:
+    from orac.model_policy import verify_model_slots
+
+    store = BoardStore(tmp_path)
+    store.init()
+    policy_store = ModelPolicyStore(store)
+    policy_store.save_policy({"lmstudio_code_model": "qwen3.6-35b-a3b"})  # not loadable
+    monkeypatch.setattr(
+        "orac.model_policy.lmstudio_models", lambda base_url="x": ["google/gemma-4-12b"]
+    )
+    monkeypatch.setattr("orac.model_policy.lmstudio_available_model_records", lambda: [])
+
+    report = verify_model_slots(policy_store)
+
+    assert report["checked"] is True
+    assert report["ok"] is False
+    assert report["missing"] == {"lmstudio_code_model": "qwen3.6-35b-a3b"}
+
+
+def test_verify_model_slots_skips_when_lmstudio_unreachable(tmp_path, monkeypatch) -> None:
+    from orac.model_policy import verify_model_slots
+
+    store = BoardStore(tmp_path)
+    store.init()
+    policy_store = ModelPolicyStore(store)
+    policy_store.save_policy({"lmstudio_standard_model": "anything"})
+    monkeypatch.setattr("orac.model_policy.lmstudio_models", lambda base_url="x": [])
+    monkeypatch.setattr("orac.model_policy.lmstudio_available_model_records", lambda: [])
+
+    report = verify_model_slots(policy_store)
+
+    assert report["checked"] is False  # no info; not a failure
+    assert report["ok"] is True
+
+
 def test_can_escalate_requires_key_and_budget(tmp_path, monkeypatch) -> None:
     store = BoardStore(tmp_path)
     store.init()

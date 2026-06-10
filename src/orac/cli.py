@@ -17,7 +17,13 @@ from orac.agent_registry import (
 from orac.intent_backbone import SPEC, IntentBackbone, IntentField
 from orac.intent_gate import IntentGate
 from orac.llm import build_brain
-from orac.model_policy import ModelPolicyStore, lmstudio_models, lmstudio_start, lmstudio_status
+from orac.model_policy import (
+    ModelPolicyStore,
+    lmstudio_models,
+    lmstudio_start,
+    lmstudio_status,
+    verify_model_slots,
+)
 from orac.models import Task, TaskStatus
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
@@ -106,13 +112,17 @@ def make_parser() -> argparse.ArgumentParser:
     models_sub = models.add_subparsers(dest="models_command", required=True)
     models_sub.add_parser("policy", help="Print current model routing decision.")
     set_model = models_sub.add_parser(
-        "set", help="Set an LM Studio model slot (the 'small' slot is the council's lens model)."
+        "set", help="Set an LM Studio model slot. Lenses use 'standard' unless 'small' is set."
     )
     set_model.add_argument(
         "--slot", choices=sorted(_MODEL_SLOTS), required=True,
-        help="Which slot to set: standard (resident), small (busy-box + lenses), code, creative.",
+        help="Which slot to set: standard (resident local model, also runs the lenses), "
+        "small (optional busy-box/lens override), code, creative.",
     )
     set_model.add_argument("--model", required=True, help="LM Studio model key/name to assign.")
+    models_sub.add_parser(
+        "verify", help="Check that every configured model slot is loadable in LM Studio."
+    )
     models_sub.add_parser("lmstudio-status", help="Check LM Studio local server status.")
     models_sub.add_parser("lmstudio-models", help="List models visible to LM Studio server.")
     start = models_sub.add_parser("lmstudio-start", help="Start LM Studio local server.")
@@ -146,7 +156,7 @@ def make_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--lenses",
         action="store_true",
-        help="Enable the council's LLM lenses (local small model) on consequential edges.",
+        help="Enable the council's LLM lenses (local model) on consequential edges.",
     )
 
     return parser
@@ -378,9 +388,20 @@ def cmd_models_set(store: BoardStore, args: argparse.Namespace) -> int:
     key = _MODEL_SLOTS[args.slot]
     policy[key] = args.model
     policy_store.save_policy(policy)
-    note = " — the council's LLM lenses will run on this model" if args.slot == "small" else ""
-    print(f"Set {key} = {args.model!r}{note}")
+    notes = {
+        "standard": " — the resident local model; the council's lenses run on it too",
+        "small": " — optional busy-box override; the lenses use this when set",
+    }
+    print(f"Set {key} = {args.model!r}{notes.get(args.slot, '')}")
     return 0
+
+
+def cmd_models_verify(store: BoardStore) -> int:
+    report = verify_model_slots(ModelPolicyStore(store))
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["checked"]:
+        return 0  # could not reach LM Studio; nothing to validate against
+    return 0 if report["ok"] else 1
 
 
 def cmd_lmstudio_status() -> int:
@@ -489,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models_policy(store)
     if args.command == "models" and args.models_command == "set":
         return cmd_models_set(store, args)
+    if args.command == "models" and args.models_command == "verify":
+        return cmd_models_verify(store)
     if args.command == "models" and args.models_command == "lmstudio-status":
         return cmd_lmstudio_status()
     if args.command == "models" and args.models_command == "lmstudio-models":

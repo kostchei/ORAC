@@ -215,9 +215,12 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
 def lens_brain(policy_store: "ModelPolicyStore") -> Any:
     """The brain for the council's LLM lenses (ROUTING['lens'] == 'local').
 
-    A deliberately small local model — limited cognition, judging one edge at a
-    time. Raw LMStudio with no RulesBrain fallback: if the local model is down,
-    lens calls raise rather than silently waving edges through or escalating en
+    Just the local model — the same one the loop already runs on. Resolution:
+    the optional 'small' busy-box slot if set, else the standard local model,
+    else whatever LM Studio has loaded. No separate small model is required.
+
+    Raw LMStudio with no RulesBrain fallback: if the local model is down, lens
+    calls raise rather than silently waving edges through or escalating en
     masse. The governor being offline is a fault to surface, per the no-fallback
     rule, not a soft path.
     """
@@ -445,6 +448,84 @@ def ensure_lmstudio_model_loaded(policy: dict[str, Any] | None = None) -> dict[s
         "identifier": policy["lmstudio_identifier"],
         "server_output": server_output,
         "load_output": load_output,
+    }
+
+
+_LLM_SLOT_KEYS = (
+    "lmstudio_standard_model",
+    "lmstudio_small_model",
+    "lmstudio_code_model",
+    "lmstudio_creative_model",
+)
+
+
+def loadable_model_keys(base_url: str = "http://localhost:1234/v1") -> list[str]:
+    """Every local model LM Studio could serve: the ids it is serving now
+    (HTTP /v1/models) plus the models downloaded but not loaded (``lms ls``).
+
+    Empty when LM Studio is reachable by neither path — the caller must treat
+    that as "could not verify", not as "nothing is loadable".
+    """
+    keys: set[str] = set(lmstudio_models(base_url))
+    for record in lmstudio_available_model_records():
+        for field in ("modelKey", "path", "selectedVariant", "displayName"):
+            value = record.get(field)
+            if value:
+                keys.add(str(value))
+    return sorted(keys)
+
+
+def _model_matches(model: str, available: set[str]) -> bool:
+    """Tolerant match: exact (case-insensitive) or same final path segment, so a
+    slot set to ``gemma-4-12b`` matches a served ``google/gemma-4-12b``."""
+    target = model.strip().lower()
+    tail = target.rsplit("/", 1)[-1]
+    for key in available:
+        key = key.strip().lower()
+        if key == target or key.rsplit("/", 1)[-1] == tail:
+            return True
+    return False
+
+
+def verify_model_slots(policy_store: "ModelPolicyStore") -> dict[str, Any]:
+    """Startup check: confirm every configured LM Studio model slot names a
+    model LM Studio can actually load. A stale or mistyped slot otherwise fails
+    only mid-build with an opaque error; this surfaces it up front.
+
+    Returns a report. ``checked`` is False when LM Studio could not be reached
+    at all (no information to validate against — not a failure). ``missing`` maps
+    each configured-but-unloadable slot to its model.
+    """
+    policy = policy_store.load_policy()
+    configured = {key: policy[key] for key in _LLM_SLOT_KEYS if policy.get(key)}
+    available = loadable_model_keys(str(policy["lmstudio_url"]))
+    if not available:
+        return {
+            "ok": True,
+            "checked": False,
+            "configured": configured,
+            "available": [],
+            "missing": {},
+            "message": "LM Studio not reachable; model slots not verified.",
+        }
+    available_set = set(available)
+    missing = {
+        slot: model
+        for slot, model in configured.items()
+        if not _model_matches(model, available_set)
+    }
+    if missing:
+        detail = ", ".join(f"{slot}={model!r}" for slot, model in missing.items())
+        message = f"configured model(s) not loadable: {detail}"
+    else:
+        message = f"all {len(configured)} configured model slot(s) are loadable"
+    return {
+        "ok": not missing,
+        "checked": True,
+        "configured": configured,
+        "available": available,
+        "missing": missing,
+        "message": message,
     }
 
 

@@ -14,7 +14,12 @@ from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
 from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
 from orac.dependency_installer import install_audio_stack
 from orac.llm import build_brain
-from orac.model_policy import ModelPolicyStore, ensure_lmstudio_model_loaded, lmstudio_loaded_models
+from orac.model_policy import (
+    ModelPolicyStore,
+    ensure_lmstudio_model_loaded,
+    lmstudio_loaded_models,
+    verify_model_slots,
+)
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
@@ -32,7 +37,7 @@ def run_ui(root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) ->
     policy = policy_store.load_policy()
     threading.Thread(
         target=_autoload_lmstudio_model,
-        args=(policy,),
+        args=(policy, policy_store),
         daemon=True,
     ).start()
     if policy.get("browser_foundation_provider"):
@@ -44,9 +49,14 @@ def run_ui(root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) ->
     server.serve_forever()
 
 
-def _autoload_lmstudio_model(policy: dict[str, Any]) -> None:
+def _autoload_lmstudio_model(policy: dict[str, Any], policy_store: ModelPolicyStore) -> None:
     result = ensure_lmstudio_model_loaded(policy)
     print(f"LM Studio startup: {result.get('action')} {result.get('message', '')}")
+    slots = verify_model_slots(policy_store)
+    # Interactive surface: warn loudly but keep the UI up so the operator can fix
+    # the slot from the settings panel. The daemon, being autonomous, hard-fails.
+    prefix = "⚠ Model slots" if slots["missing"] else "Model slots"
+    print(f"{prefix}: {slots['message']}")
 
 
 def _autostart_browser_foundation(policy: dict[str, Any], root: Path) -> None:

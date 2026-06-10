@@ -6,7 +6,11 @@ from pathlib import Path
 
 from orac.browser_brain import ensure_browser_foundation_ready
 from orac.llm import build_brain
-from orac.model_policy import ModelPolicyStore
+from orac.model_policy import (
+    ModelPolicyStore,
+    ensure_lmstudio_model_loaded,
+    verify_model_slots,
+)
 from orac.scrum import Scrum
 from orac.storage import BoardStore
 
@@ -24,7 +28,22 @@ class DaemonTick:
 def run_daemon(root: Path | str = ".", interval_seconds: int = 60, cycles: int = 1) -> None:
     store = BoardStore(root)
     store.init()
-    policy = ModelPolicyStore(store).load_policy()
+    policy_store = ModelPolicyStore(store)
+    policy = policy_store.load_policy()
+
+    # Ready the local model, then verify every configured slot names a model LM
+    # Studio can actually load. A misconfigured slot is a fault to surface at
+    # startup, not one to discover mid-build (no-fallback: throw, don't limp on).
+    load = ensure_lmstudio_model_loaded(policy)
+    print(f"LM Studio startup: {load.get('action')} — {load.get('message', '')}")
+    slots = verify_model_slots(policy_store)
+    print(f"Model slots: {slots['message']}")
+    if slots["missing"]:
+        raise RuntimeError(
+            f"Configured model(s) not loadable in LM Studio: {slots['missing']}. "
+            f"Available: {slots['available']}. Fix with `orac models set` or load the model."
+        )
+
     if policy.get("browser_foundation_provider"):
         result = ensure_browser_foundation_ready(policy, orac_root=root)
         print(f"Browser foundation: {result.get('action')} — {result.get('message', '')}")
