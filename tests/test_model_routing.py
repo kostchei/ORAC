@@ -108,9 +108,11 @@ def test_session_brain_for_routes_by_kind_and_escalation(tmp_path) -> None:
     assert isinstance(escalated.primary, FoundationBrain)
 
 
-def test_blocked_local_session_escalates_once_then_stays_blocked(tmp_path, monkeypatch) -> None:
+def test_local_retries_once_before_browser_escalation(tmp_path, monkeypatch) -> None:
+    """First local failure → retry locally.  Second failure → escalate to browser."""
     _setup(tmp_path)
-    monkeypatch.setenv("ORAC_FOUNDATION_API_KEY", "test-key")
+    monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
+    monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
     task = Task(
         title="too hard for local",
         status=TaskStatus.READY,
@@ -118,26 +120,65 @@ def test_blocked_local_session_escalates_once_then_stays_blocked(tmp_path, monke
         metadata={"goal": "do something local cannot"},
     )
     board = Board(tasks=[task])
-    # route_models=True: the session brain is LMStudio (connection refused in
-    # tests) -> FallbackBrain -> RulesBrain prose -> unparseable -> blocked.
+    # LMStudio unreachable → FallbackBrain → RulesBrain prose → unparseable → blocked.
     scrum = Scrum(brain=None, root=tmp_path, route_models=True)
 
+    # First failure: should retry locally, NOT escalate yet.
     scrum.run(board, cycles=1)
+    assert task.metadata.get("local_failures") == 1
+    assert task.metadata.get("escalated") is None
+    assert task.status == TaskStatus.READY
 
+    # Second failure: should now escalate to browser with a round-robin provider.
+    scrum.run(board, cycles=1)
+    assert task.metadata.get("local_failures") == 2
     assert task.metadata.get("escalated") is True
-    assert task.status == TaskStatus.READY  # requeued for the foundation model
-    assert any("escalated" in log.message for log in task.work_log)
+    assert task.metadata.get("browser_provider") in ("claude", "gemini", "openai")
+    assert task.status == TaskStatus.READY
 
-    # Second failure (already escalated) stays BLOCKED for the human.
+    # Third failure (browser also blocked) → stays BLOCKED for human.
     import orac.model_policy as model_policy
 
     monkeypatch.setattr(
         model_policy,
         "session_brain_for",
         lambda policy_store, t: StructuredScriptedBrain(
-            [json.dumps({"blocked": True, "reason": "still cannot"})]
+            [json.dumps({"blocked": True, "reason": "browser also failed"})]
         ),
     )
     scrum.run(board, cycles=1)
-
     assert task.status == TaskStatus.BLOCKED
+
+
+def test_browser_provider_round_robin(tmp_path, monkeypatch) -> None:
+    """next_browser_provider rotates claude → gemini → openai → claude."""
+    from orac.model_policy import ModelPolicyStore, next_browser_provider, _BROWSER_PROVIDERS
+    from orac.storage import BoardStore
+
+    store = BoardStore(tmp_path)
+    store.init()
+    ps = ModelPolicyStore(store)
+
+    providers = [next_browser_provider(ps) for _ in range(6)]
+    assert providers == _BROWSER_PROVIDERS * 2
+
+
+def test_browser_provider_stored_in_task_metadata(tmp_path, monkeypatch) -> None:
+    """The assigned provider is stored in task.metadata so session_brain_for uses it."""
+    from orac.model_policy import ModelPolicyStore, session_brain_for
+    from orac.browser_brain import BrowserFoundationBrain
+    from orac.llm import FallbackBrain
+    from orac.storage import BoardStore
+
+    monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
+    monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
+    store = BoardStore(tmp_path)
+    store.init()
+    ps = ModelPolicyStore(store)
+
+    task = Task(title="t", work_kind="code", metadata={"escalated": True, "browser_provider": "gemini"})
+    brain = session_brain_for(ps, task)
+    assert isinstance(brain, FallbackBrain)
+    assert isinstance(brain.primary, BrowserFoundationBrain)
+    # Uses the task-assigned provider, not the env-var default.
+    assert brain.primary.provider == "gemini"

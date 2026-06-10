@@ -192,20 +192,41 @@ def can_escalate(policy_store: "ModelPolicyStore") -> bool:
 def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
     """The brain for a doer session (docs/model-selection.md routing).
 
-    Escalated tasks (a local session already failed on them) get the foundation
-    brain (API or browser); everything else runs locally on the work kind's model
-    slot. Callers must check :func:`can_escalate` before marking a task escalated.
+    Escalated tasks use the browser provider assigned at escalation time
+    (stored in task.metadata["browser_provider"]).  Everything else runs
+    locally on the work-kind model slot.
     """
     from orac.llm import build_brain
 
     if task.metadata.get("escalated"):
         policy = policy_store.load_policy()
-        provider = _browser_provider(policy)
+        # Prefer the provider assigned at escalation time (round-robin result).
+        provider = (
+            str(task.metadata.get("browser_provider", ""))
+            or _browser_provider(policy)
+        )
         if provider:
             return build_brain("browser", model=provider)
         return build_brain("foundation")
     policy = policy_store.load_policy()
     return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
+
+
+_BROWSER_PROVIDERS = ["claude", "gemini", "openai"]
+
+
+def next_browser_provider(policy_store: "ModelPolicyStore") -> str:
+    """Return the next browser provider in the round-robin rotation.
+
+    The index is persisted in usage.json so the rotation survives restarts
+    and is shared across tasks in the same ORAC root.
+    """
+    usage = policy_store.usage()
+    idx = int(usage.get("browser_provider_index", 0))
+    provider = _BROWSER_PROVIDERS[idx % len(_BROWSER_PROVIDERS)]
+    usage["browser_provider_index"] = idx + 1
+    policy_store.store.save_json(policy_store.store.usage_path, usage)
+    return provider
 
 
 def _today_key() -> str:

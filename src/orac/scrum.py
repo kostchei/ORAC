@@ -129,21 +129,44 @@ class Scrum:
         return session_brain_for(ModelPolicyStore(BoardStore(self.root)), task)
 
     def _maybe_escalate(self, task: Task) -> None:
-        """One failed local session is the cheapest signal a task exceeds local
-        capability: mark it escalated and requeue it for the foundation model.
-        A second failure stays BLOCKED for the human."""
-        if not self.route_models or task.metadata.get("escalated"):
-            return
-        from orac.model_policy import ModelPolicyStore, can_escalate
-        from orac.storage import BoardStore
+        """Two local failures trigger escalation to a browser foundation provider.
 
-        if not can_escalate(ModelPolicyStore(BoardStore(self.root))):
+        Failure 1 → retry locally (different random seed, same model).
+        Failure 2 → assign the next round-robin browser provider and requeue.
+        After the browser also fails → stays BLOCKED for the human.
+        """
+        if not self.route_models:
             return
+        # Browser already tried and failed — leave it BLOCKED for the human.
+        if task.metadata.get("escalated"):
+            return
+
+        failures = int(task.metadata.get("local_failures", 0)) + 1
+        task.metadata["local_failures"] = failures
+
+        if failures < 2:
+            task.transition(TaskStatus.READY)
+            task.add_log(
+                "system",
+                f"Local session failed (attempt {failures}/2); retrying locally.",
+            )
+            return
+
+        # Two local failures: escalate to the next browser provider if available.
+        from orac.model_policy import ModelPolicyStore, can_escalate, next_browser_provider  # noqa: PLC0415
+        from orac.storage import BoardStore  # noqa: PLC0415
+
+        policy_store = ModelPolicyStore(BoardStore(self.root))
+        if not can_escalate(policy_store):
+            return  # no escalation path; task stays BLOCKED
+
+        provider = next_browser_provider(policy_store)
         task.metadata["escalated"] = True
+        task.metadata["browser_provider"] = provider
         task.transition(TaskStatus.READY)
         task.add_log(
             "system",
-            "Local session failed; escalated — will retry with the foundation model.",
+            f"Local failed twice; escalating to browser (provider={provider}).",
         )
 
     def _originate_if_idle(self, board: Board) -> str | None:
