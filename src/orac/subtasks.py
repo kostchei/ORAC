@@ -3,10 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from orac.agent_registry import load_agent_profiles
-from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
-from orac.llm import Brain
 from orac.models import Board, CapabilityRequest, CapabilityStatus, Task, TaskStatus
 
 # P4: orchestrator -> Builder spawn (design §4.5/§4.6).
@@ -141,83 +138,6 @@ def execute_build_subtask(
         child.add_log("Builder", f"Build of {contract.goal!r} failed its tests.")
         child.transition(TaskStatus.BLOCKED)
     return summary
-
-
-GOAL_CONTRACT_TEMPLATE = """\
-GOAL: {goal}
-
-ACCEPTANCE CRITERIA:
-{criteria}
-
-REPO ROOT (the only place you may write): {repo_root}
-
-WORKING RULES:
-- Checkpoint first: create a branch (suggested name: build/{task_id}) before changing files.
-- One logical change per commit, with explicit paths.
-- Run the tests; you are not done until they pass.
-- Report done with a summary of what you built and the passing test evidence.
-"""
-
-
-def run_goal_build(
-    board: Board,
-    parent: Task,
-    goal: str,
-    acceptance_criteria: tuple[str, ...],
-    brain: Brain,
-    broker: ToolBroker,
-    repo_root: str,
-    max_steps: int = 16,
-) -> Task:
-    """Spawn a Builder *session* against a goal — the model decides how.
-
-    Unlike :func:`run_build` (spec-complete contract, fixed execution), the
-    contract here names only the goal, criteria, and rules. The Builder model
-    chooses what to read, write, commit, and test, every step adjudicated by
-    the broker. Summary-up to the parent on completion; blocked propagates.
-    """
-    child = Task(
-        title=f"[build] {goal}",
-        description=goal,
-        parent_id=parent.id,
-        assignee="Builder",
-        status=TaskStatus.IN_PROGRESS,
-        acceptance_criteria=list(acceptance_criteria),
-        metadata={"contract": {"goal": goal, "kind": "goal"}},
-    )
-    board.add_task(child)
-    parent.add_log("Orchestrator", f"Spawned goal-build subtask {child.id}: {goal}")
-
-    profiles = {profile.slug: profile for profile in load_agent_profiles()}
-    session = AgentSession(
-        profile=profiles["builder"], brain=brain, broker=broker, max_steps=max_steps
-    )
-    contract = GOAL_CONTRACT_TEMPLATE.format(
-        goal=goal,
-        criteria="\n".join(f"- {c}" for c in acceptance_criteria) or "- tests pass",
-        repo_root=repo_root,
-        task_id=child.id,
-    )
-    result = session.run(child, contract)
-
-    if result.status == "done":
-        child.transition(TaskStatus.DONE)
-        parent.add_log(
-            "Orchestrator", f"Goal-build {child.id} done: {result.summary}"
-        )
-    elif result.status == "pending":
-        child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
-        parent.add_log(
-            "Orchestrator",
-            f"Goal-build {child.id} parked for approval (pending {result.pending_id}).",
-        )
-    else:
-        child.transition(TaskStatus.BLOCKED)
-        parent.transition(TaskStatus.BLOCKED)
-        parent.add_log(
-            "Orchestrator", f"Goal-build {child.id} blocked: {result.summary}"
-        )
-    return child
 
 
 def run_build(

@@ -11,7 +11,7 @@ from orac.broker_store import BrokerStore
 from orac.driver import originate
 from orac.models import Board, Task, TaskStatus
 from orac.scrum import Scrum
-from orac.subtasks import run_goal_build
+from orac.work import WORK_KINDS, run_goal_task
 
 
 @dataclass
@@ -120,22 +120,50 @@ def test_parse_decision_tolerates_fences_only() -> None:
     assert parse_decision("let me explain my plan...") is None
 
 
-def test_run_goal_build_rolls_summary_up(tmp_path) -> None:
+def test_run_goal_task_code_kind_rolls_summary_up(tmp_path) -> None:
     broker, _ = _setup(tmp_path)
     board = Board()
     parent = Task(title="improve", status=TaskStatus.IN_PROGRESS)
     board.add_task(parent)
 
-    child = run_goal_build(
+    child = run_goal_task(
         board, parent,
         goal="add a tiny module",
         acceptance_criteria=("tests pass",),
+        work_kind="code",
         brain=ScriptedBrain(_builder_script(tmp_path)),
-        broker=broker, repo_root=str(tmp_path),
+        broker=broker, context={"repo_root": str(tmp_path)},
     )
 
     assert child.status == TaskStatus.DONE
     assert "passing test" in parent.work_log[-1].message
+
+
+def test_work_kind_registry_covers_all_five_categories() -> None:
+    assert set(WORK_KINDS) == {"code", "comms", "media", "physical", "event"}
+    # code is the bootstrap and has a doer; each kind states what done means
+    assert WORK_KINDS["code"].doer_slug == "builder"
+    assert all(spec.done_means for spec in WORK_KINDS.values())
+
+
+def test_non_code_kind_without_doer_blocks_visibly(tmp_path) -> None:
+    broker, _ = _setup(tmp_path)
+    board = Board()
+    parent = Task(title="tell someone", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    child = run_goal_task(
+        board, parent,
+        goal="draft a status update to the operator",
+        acceptance_criteria=("draft exists",),
+        work_kind="comms",
+        brain=ScriptedBrain([]),  # must never be consulted: no doer exists
+        broker=broker, context={},
+    )
+
+    assert child.status == TaskStatus.BLOCKED
+    assert parent.status == TaskStatus.BLOCKED
+    assert "no doer" in child.work_log[-1].message.lower()
 
 
 def test_driver_originates_locked_ready_task_from_telemetry(tmp_path) -> None:
@@ -156,7 +184,8 @@ def test_driver_originates_locked_ready_task_from_telemetry(tmp_path) -> None:
     task = origination.task
     assert task.status == TaskStatus.READY  # intent pre-answered from the mandate and locked
     assert task.metadata["origin"] == "optimise-driver"
-    assert task.metadata["build_goal"] == origination.goal
+    assert task.metadata["goal"] == origination.goal
+    assert task.work_kind == "code"  # defaulted; the driver may name any registered kind
     assert task.acceptance_criteria == ["new test exists", "suite passes"]
     # telemetry reached the model
     assert "tasks_by_status" in brain.prompts[0]

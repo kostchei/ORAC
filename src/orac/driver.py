@@ -38,14 +38,18 @@ ORIGINATION_PROMPT = """\
 You are the Optimise driver of ORAC. The board is idle and resources are free.
 Your standing mandate: with no other work, ORAC investigates its own system —
 testing, securing, and hardening itself. Propose ONE small, concrete,
-reversible self-improvement goal that a Builder agent could complete with
-code changes and tests in this repository.
+reversible self-improvement goal.
+
+WORK KINDS AVAILABLE: {kinds}
+(kinds marked no-doer have no doer agent yet; proposing one creates a visibly
+blocked task — only do that to flag genuinely needed non-code work)
 
 SYSTEM TELEMETRY:
 {telemetry}
 
 Reply with a single JSON object and nothing else:
-{{"goal": "<one concrete buildable goal>",
+{{"goal": "<one concrete achievable goal>",
+  "work_kind": "<one of the kinds above>",
   "why": "<which telemetry signal motivates it>",
   "acceptance_criteria": ["<checkable criterion>", "..."]}}
 """
@@ -108,11 +112,17 @@ def originate(
     if store.rate_count("Optimiser", ORIGINATE_COUNTER, today_utc()) >= daily_cap:
         return None
 
+    from orac.work import WORK_KINDS
+
     telemetry = gather_telemetry(board, store, repo_root)
+    kinds = ", ".join(
+        spec.kind if spec.doer_slug else f"{spec.kind} (no-doer)"
+        for spec in WORK_KINDS.values()
+    )
     seed = Task(title="originate self-improvement", description="driver tick")
     reply = brain.think(
         "Optimiser", "optimiser", seed, ORIGINATION_PROMPT.format(
-            telemetry=json.dumps(telemetry, indent=2)
+            kinds=kinds, telemetry=json.dumps(telemetry, indent=2)
         )
     )
     decision = parse_decision(reply)
@@ -120,17 +130,21 @@ def originate(
         raise ValueError(f"Optimise driver produced no parseable goal: {reply[:300]!r}")
 
     goal = str(decision["goal"])
+    work_kind = str(decision.get("work_kind", "code"))
+    if work_kind not in WORK_KINDS:
+        raise ValueError(f"Optimise driver named unknown work kind {work_kind!r}.")
     why = str(decision.get("why", ""))
     criteria = [str(c) for c in decision.get("acceptance_criteria", [])] or [
-        "tests pass after the change"
+        "verifiable per the work kind's done-means"
     ]
 
     task = Task(
         title=goal,
         description=why or goal,
-        metadata={"origin": "optimise-driver", "build_goal": goal},
+        work_kind=work_kind,
+        metadata={"origin": "optimise-driver", "goal": goal},
     )
-    _lock_intent_from_mandate(task, goal, why, criteria)
+    _lock_intent_from_mandate(task, goal, why, criteria, work_kind)
     board.add_task(task)
     task.add_log(
         "Optimiser",
@@ -141,24 +155,26 @@ def originate(
 
 
 def _lock_intent_from_mandate(
-    task: Task, goal: str, why: str, criteria: list[str]
+    task: Task, goal: str, why: str, criteria: list[str], work_kind: str
 ) -> None:
     """Pre-answer the intent gate from the standing mandate.
 
     A human task earns READY by answering Intent's questions; a self-originated
-    task answers them from the mandate that authorised it — reversible code
-    work, checkpoint-first, verified by tests — then locks.
+    task answers them from the mandate that authorised it — reversible-only
+    work verified per its kind's done-means — then locks.
     """
+    from orac.work import WORK_KINDS
+
     intent = IntentBackbone()
     answers = {
         IntentField.PURPOSE: why or goal,
         IntentField.AUDIENCE: "the ORAC system and its operator",
         IntentField.MUST_INCLUDE: criteria[0],
         IntentField.SUCCESS_CRITERIA: "; ".join(criteria),
-        IntentField.FORMAT: "code change",
+        IntentField.FORMAT: f"{work_kind} deliverable: {WORK_KINDS[work_kind].done_means}",
         IntentField.TECH_STACK: "current repository stack",
-        IntentField.EDGE_CASES: "covered by the required tests",
-        IntentField.RISK_TOLERANCE: "reversible-only: branch, path-scoped commits, tests",
+        IntentField.EDGE_CASES: "covered by the kind's verification",
+        IntentField.RISK_TOLERANCE: "reversible-only, per the standing mandate",
     }
     for fieldname, value in answers.items():
         intent.answer(task, fieldname, value)

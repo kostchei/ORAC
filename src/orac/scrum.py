@@ -89,23 +89,26 @@ class Scrum:
         return ScrumRunResult(cycles=cycles, touched_tasks=len(touched), done_tasks=done)
 
     def _build_if_goal_task(self, board: Board, task: Task) -> bool:
-        """Goal tasks get really built by a Builder session, not theatrically
-        advanced by the council state machine."""
+        """Goal tasks are really executed by their kind's doer session, not
+        theatrically advanced by the council state machine."""
         if self.broker is None or self.root is None:
             return False
-        if "build_goal" not in task.metadata or task.status != TaskStatus.READY:
+        if task.work_kind is None or "goal" not in task.metadata:
             return False
-        from orac.subtasks import run_goal_build
+        if task.status != TaskStatus.READY:
+            return False
+        from orac.work import run_goal_task
 
         task.transition(TaskStatus.IN_PROGRESS)
-        child = run_goal_build(
+        child = run_goal_task(
             board=board,
             parent=task,
-            goal=str(task.metadata["build_goal"]),
+            goal=str(task.metadata["goal"]),
             acceptance_criteria=tuple(task.acceptance_criteria),
+            work_kind=task.work_kind,
             brain=self.brain,
             broker=self.broker,
-            repo_root=str(self.root),
+            context={"repo_root": str(self.root)},
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)

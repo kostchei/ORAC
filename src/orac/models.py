@@ -85,6 +85,9 @@ class Task:
     status: TaskStatus = TaskStatus.BACKLOG
     assignee: str | None = None
     parent_id: str | None = None
+    # Which capability category does this work belong to (code / comms / media /
+    # physical / event)? None = not a goal-driven task. See orac.work.WORK_KINDS.
+    work_kind: str | None = None
     acceptance_criteria: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     work_log: list[WorkLog] = field(default_factory=list)
@@ -136,6 +139,7 @@ class Task:
             status=TaskStatus(data.get("status", TaskStatus.BACKLOG)),
             assignee=data.get("assignee"),
             parent_id=data.get("parent_id"),
+            work_kind=data.get("work_kind"),
             acceptance_criteria=list(data.get("acceptance_criteria", [])),
             metadata=dict(data.get("metadata", {})),
             work_log=[WorkLog.from_dict(item) for item in data.get("work_log", [])],

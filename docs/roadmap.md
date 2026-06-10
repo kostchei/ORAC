@@ -47,6 +47,12 @@ Ordered; each step keeps the suite green.
       locked self-improvement task (rate-capped/day; driver faults surface as visible BLOCKED
       tasks). Loop wiring: goal tasks are really built by Builder sessions, never theatrically
       advanced; the daemon originates when idle.
+- [x] **General work model.** `work.py::WORK_KINDS` — tasks carry a `work_kind` spanning all five
+      categories (code / comms / media / physical / event), each with its sole doer (the §4.6
+      one-writer invariant generalised: Messenger will hold `channel.send`, Operator
+      `execute_action`, …), its contract rules, and its kind-specific "done means".
+      `run_goal_task` is the one runner for every kind; only `code` has a doer today — a goal in
+      a doer-less kind blocks visibly, naming the missing capability group.
 - [ ] **`browser.verify_local_app`** — verification before a task may reach `done`.
 
 **Exit criterion for Milestone A:** idle ORAC picks a self-improvement task, branches, applies a
