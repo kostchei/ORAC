@@ -65,28 +65,6 @@ class IntentBackbone:
             locked=bool(state.get("locked", False)),
         )
 
-    def apply_gate(self, task: Task, agent: str) -> bool:
-        assessment = self.assess(task)
-        if task.status not in {TaskStatus.BACKLOG, TaskStatus.CLARIFYING}:
-            return False
-        if assessment.locked and assessment.confidence >= self.confidence_threshold:
-            self._apply_acceptance_criteria(task)
-            task.transition(TaskStatus.READY)
-            task.add_log(agent, "Intent locked. Work may proceed to build and self-test.")
-            return True
-        task.transition(TaskStatus.CLARIFYING)
-        if assessment.next_question:
-            task.add_log(
-                agent,
-                f"Clarify loop at {assessment.confidence}% confidence. Next question: {assessment.next_question}",
-            )
-        else:
-            task.add_log(
-                agent,
-                f"Echo check ready at {assessment.confidence}% confidence: {assessment.echo_check}",
-            )
-        return True
-
     def answer(self, task: Task, field: IntentField | str, value: str) -> IntentAssessment:
         field = IntentField(field)
         state = self._state(task)
@@ -107,9 +85,11 @@ class IntentBackbone:
         state = self._state(task)
         state["locked"] = True
         task.metadata["intent"] = state
-        self._apply_acceptance_criteria(task)
-        task.transition(TaskStatus.READY)
-        task.add_log("Intent", "YES-GO received. Intent locked.")
+        self.apply_acceptance_criteria(task)
+        # The release to READY (and the goal + work_kind it fixes) is the
+        # IntentGate's job — the single front door. lock() only records the
+        # YES-GO; the gate turns it into a buildable goal task on its next tick.
+        task.add_log("Intent", "YES-GO received. Intent locked; awaiting gate release.")
         return self.assess(task)
 
     def reset(self, task: Task) -> None:
@@ -143,7 +123,7 @@ class IntentBackbone:
             "Reply YES to lock, EDITS to revise, BLUEPRINT for plan, or RISK for failure modes."
         )
 
-    def _apply_acceptance_criteria(self, task: Task) -> None:
+    def apply_acceptance_criteria(self, task: Task) -> None:
         answers = self._answers(task)
         task.acceptance_criteria = [
             f"Purpose met: {self._answer_for(IntentField.PURPOSE, task, answers)}",

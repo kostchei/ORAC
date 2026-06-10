@@ -30,8 +30,9 @@ flat-hierarchy limitation.
 | Durable state | `broker_store.py::BrokerStore` | SQLite: grants, audit, pending_approvals, rate_counters |
 | Approval path | `broker.py` + `scrum.py` | `pending` verdict → `Task.park_for_approval` → loop resume |
 | Real tool | `adapters.py::fs_read` | first adapter that touches an external system |
-| The four agents | `agents.py` + `prompts/*` | deterministic `_apply_builtin_action`, sequential, trusted |
-| Loop | `scrum.py::Scrum.run` | iterates tasks, runs all agents per task, resumes parked tasks |
+| The four lenses | `council.py::Council` | deterministic edge checks at the broker; verdicts shape outcomes, never task status |
+| Intent gate | `intent_gate.py::IntentGate` | pre-work front door: clarify loop → release to READY with goal + work_kind |
+| Loop | `scrum.py::Scrum.run` | one path per task: resume approved · gate unlocked · build locked-and-ready goal task |
 
 **Gap this doc closes:** the broker's policy is a one-line allow-list check, and the four
 agents run as a fixed sequence that trusts each prior stage. We replace that thin policy

@@ -212,6 +212,25 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
     return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
 
 
+def lens_brain(policy_store: "ModelPolicyStore") -> Any:
+    """The brain for the council's LLM lenses (ROUTING['lens'] == 'local').
+
+    A deliberately small local model — limited cognition, judging one edge at a
+    time. Raw LMStudio with no RulesBrain fallback: if the local model is down,
+    lens calls raise rather than silently waving edges through or escalating en
+    masse. The governor being offline is a fault to surface, per the no-fallback
+    rule, not a soft path.
+    """
+    from orac.llm import LMStudioBrain
+
+    policy = policy_store.load_policy()
+    model = str(policy.get("lmstudio_small_model") or policy.get("lmstudio_standard_model") or "")
+    brain = LMStudioBrain()
+    if model:
+        brain.model = model
+    return brain
+
+
 _BROWSER_PROVIDERS = ["claude", "gemini", "openai"]
 
 

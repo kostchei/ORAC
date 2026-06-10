@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orac.agents import RuntimeAgent, build_core_agents
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
+from orac.intent_gate import IntentGate
 from orac.llm import Brain
 from orac.models import Board, Task, TaskStatus
 
@@ -26,21 +26,29 @@ class Scrum:
     # escalate-to-foundation after a local failure). Off by default so explicit
     # brain choices (tests, CLI --brain) stay exact.
     route_models: bool = False
-    agents: list[RuntimeAgent] = field(init=False)
+    # Activate the council's P5 cognition layer: the three judgement lenses
+    # reason over consequential edges on a small local model. Off by default so
+    # tests and explicit-brain runs keep the deterministic floor only.
+    llm_lenses: bool = False
     store: BrokerStore | None = field(init=False, default=None)
     broker: ToolBroker | None = field(init=False, default=None)
+    gate: IntentGate = field(init=False)
 
     def __post_init__(self) -> None:
         if self.root is not None:
             self.store = BrokerStore(self.root).init()
-            self.broker = ToolBroker.from_store(self.store, repo_root=self.root)
-        self.agents = build_core_agents(self.brain, self.broker)
+            self.broker = ToolBroker.from_store(
+                self.store, repo_root=self.root, council_brain=self._lens_brain()
+            )
+        self.gate = IntentGate()
 
-    @property
-    def council_agents(self) -> list[RuntimeAgent]:
-        """The review-loop agents. Doer subagents (e.g. Builder) are excluded —
-        they act when spawned, not in the round-robin council loop."""
-        return [agent for agent in self.agents if agent.profile.kind == "council"]
+    def _lens_brain(self) -> Brain | None:
+        if not self.llm_lenses:
+            return None
+        from orac.model_policy import ModelPolicyStore, lens_brain
+        from orac.storage import BoardStore
+
+        return lens_brain(ModelPolicyStore(BoardStore(self.root)))
 
     def plan_sprint(self, board: Board, capacity: int) -> list[Task]:
         planned: list[Task] = []
@@ -56,34 +64,31 @@ class Scrum:
             task.add_log("system", f"Selected for sprint plan within capacity {capacity}.")
         return planned
 
-    SKIP_STATUSES = {
-        TaskStatus.CLARIFYING,
-        TaskStatus.DONE,
-        TaskStatus.BLOCKED,
-        TaskStatus.PENDING_APPROVAL,
-    }
-
     def run(self, board: Board, cycles: int = 1) -> ScrumRunResult:
+        """One tick per task, one path each: resume an approved task, gate an
+        unlocked one, or build a locked-and-ready goal task. The fake council
+        round-robin is gone — nothing advances task status by theatre."""
         touched: set[str] = set()
         for _ in range(cycles):
             for task in list(board.tasks):
                 if task.parent_id is not None and "contract" in task.metadata:
                     # Doer subtasks (Builder children) are driven by their
-                    # runner, not the council round-robin.
+                    # runner, not by this loop.
                     continue
                 if task.status == TaskStatus.PENDING_APPROVAL:
                     if self._resume_if_resolved(task):
                         touched.add(task.id)
-                if task.status in self.SKIP_STATUSES:
                     continue
+                if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED}:
+                    continue
+                if task.status in IntentGate.OWNED_STATUSES:
+                    # Pre-work front door: clarify until intent locks, then the
+                    # gate releases the task to READY with goal + work_kind.
+                    if self.gate.advance(task):
+                        touched.add(task.id)
+                    continue
+                # Locked + READY goal task: the real doer session does the work.
                 if self._build_if_goal_task(board, task):
-                    touched.add(task.id)
-                    continue
-                before = (task.status, len(task.work_log))
-                for agent in self.council_agents:
-                    agent.work(task)
-                after = (task.status, len(task.work_log))
-                if after != before:
                     touched.add(task.id)
         if self.originate_when_idle:
             originated = self._originate_if_idle(board)

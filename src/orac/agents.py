@@ -5,14 +5,12 @@ from typing import Any
 
 from orac.agent_registry import AgentProfile, load_agent_profiles
 from orac.broker import ToolBroker
-from orac.intent_backbone import IntentBackbone
 from orac.llm import Brain
 from orac.models import (
     CapabilityRequest,
     CapabilityResult,
     CapabilityStatus,
     Task,
-    TaskStatus,
 )
 
 
@@ -30,6 +28,17 @@ class ApprovalPending(Exception):
 
 @dataclass
 class RuntimeAgent:
+    """A capability-using actor: it routes tool calls through the broker and
+    parks its task when a call needs human approval.
+
+    The deterministic council once drove task *status* from here, marching
+    tasks through a scripted READY -> IN_PROGRESS -> REVIEW -> DONE. That
+    theatrical path is gone: real work happens in AgentSession, the intent axis
+    advances only in IntentGate, and the only outcome the council shapes now is
+    via broker edges. RuntimeAgent remains the thin broker-facing actor (e.g.
+    the Builder using a granted tool, or a test exercising the park machinery).
+    """
+
     profile: AgentProfile
     brain: Brain
     broker: ToolBroker
@@ -43,26 +52,26 @@ class RuntimeAgent:
         return self.profile.slug
 
     def work(self, task: Task) -> None:
+        """Perform this agent's action, parking the task if the broker requires
+        approval. ``_act`` supplies the concrete behaviour; the base agent has
+        none — the live system drives real work through AgentSession."""
         before = task.status
         try:
-            acted = self._apply_builtin_action(task)
+            self._act(task)
         except ApprovalPending as parked:
             task.park_for_approval(parked.pending_id, before)
-            task.add_log(
-                self.name,
-                f"Parked for approval (pending {parked.pending_id}).",
-            )
-            return
-        if not acted:
-            return
-        prompt = self._task_prompt(task, before)
-        task.add_log(self.name, self.brain.think(self.name, self.role, task, prompt))
+            task.add_log(self.name, f"Parked for approval (pending {parked.pending_id}).")
+
+    def _act(self, task: Task) -> bool:
+        """No built-in action. Overridden where an agent has concrete work."""
+        del task
+        return False
 
     def _use(self, task: Task, tool: str, **args: Any) -> CapabilityResult:
         """Route one tool call through the broker.
 
-        The deterministic flow relies on each grant being in place, so a denied
-        or errored capability is a wiring bug, not a soft path — fail loud.
+        A denied or errored capability is a wiring bug, not a soft path — fail
+        loud. A pending verdict becomes an ApprovalPending the caller parks on.
         """
         result = self.broker.request(
             CapabilityRequest(agent=self.name, tool=tool, task_id=task.id, args=args),
@@ -76,98 +85,6 @@ class RuntimeAgent:
                 f"{result.status.value} - {result.message}"
             )
         return result
-
-    def _task_prompt(self, task: Task, previous_status: TaskStatus) -> str:
-        tools = ", ".join(self.profile.tools)
-        criteria = "\n".join(f"- {item}" for item in task.acceptance_criteria) or "- None yet"
-        return (
-            f"{self.profile.system_prompt}\n\n"
-            f"Available regular tools: {tools}\n"
-            f"Previous status: {previous_status.value}\n"
-            f"Current status: {task.status.value}\n"
-            f"Acceptance criteria:\n{criteria}\n\n"
-            "Write the next concise work-log entry for this task."
-        )
-
-    def _apply_builtin_action(self, task: Task) -> bool:
-        if self.profile.slug == "intent":
-            return self._clarify_intent(task)
-        if self.profile.slug == "optimiser":
-            return self._budget_resources(task)
-        if self.profile.slug == "simples":
-            return self._advance_simple_path(task)
-        if self.profile.slug == "efficiency":
-            return self._review_efficiency(task)
-        if self.profile.slug == "orchestrator":
-            return self._report_to_main_task(task)
-        return False
-
-    def _clarify_intent(self, task: Task) -> bool:
-        return IntentBackbone().apply_gate(task, self.name)
-
-    def _budget_resources(self, task: Task) -> bool:
-        if task.status != TaskStatus.READY:
-            return False
-        self._use(
-            task,
-            "resource_budgeter",
-            resource_type="available effort",
-            budget_limit="60%",
-        )
-        self._use(
-            task,
-            "handoff_tracker",
-            next_owner="Simples",
-            reason="ready work should follow the smallest effective path",
-        )
-        return True
-
-    def _advance_simple_path(self, task: Task) -> bool:
-        if task.status == TaskStatus.READY:
-            self._use(
-                task,
-                "minimal_path_planner",
-                candidate_steps=["clarify", "budget", "implement", "review"],
-            )
-            task.transition(TaskStatus.IN_PROGRESS)
-            return True
-        if task.status == TaskStatus.IN_PROGRESS:
-            self._use(
-                task,
-                "implementation_log",
-                change_summary="advanced the task to review using the current minimal path",
-            )
-            task.transition(TaskStatus.REVIEW)
-            return True
-        return False
-
-    def _review_efficiency(self, task: Task) -> bool:
-        if task.status != TaskStatus.REVIEW:
-            return False
-        if not task.acceptance_criteria:
-            task.add_log(self.name, "Blocked: no acceptance criteria available for review.")
-            task.transition(TaskStatus.BLOCKED)
-            return True
-        self._use(task, "waste_scanner", scope="task outcome")
-        self._use(
-            task,
-            "design_replay",
-            current_design="current task flow remains small enough to keep",
-        )
-        self._use(
-            task,
-            "verification_log",
-            checks=list(task.acceptance_criteria),
-            result="passed",
-        )
-        task.transition(TaskStatus.DONE)
-        return True
-
-    def _report_to_main_task(self, task: Task) -> bool:
-        if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED}:
-            return False
-        self._use(task, "status_reporter")
-        return True
 
 
 def build_core_agents(

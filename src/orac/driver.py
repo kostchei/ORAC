@@ -195,3 +195,9 @@ def _lock_intent_from_mandate(
         intent.answer(task, fieldname, value)
     intent.lock(task)
     task.acceptance_criteria = list(criteria)
+    # Same front door a human task takes: the gate releases to READY. goal and
+    # work_kind are already fixed from the mandate, so release() only confirms
+    # them and flips the status.
+    from orac.intent_gate import IntentGate  # noqa: PLC0415
+
+    IntentGate().release(task)

@@ -131,7 +131,7 @@ def test_council_escalation_parks_task_end_to_end(tmp_path) -> None:
     agent = next(a for a in build_core_agents(RulesBrain(), broker) if a.name == "Builder")
     task = Task(title="loop work", status=TaskStatus.IN_PROGRESS)
 
-    agent._apply_builtin_action = lambda t: bool(
+    agent._act = lambda t: bool(
         agent._use(t, "git.status", root=str(tmp_path))
     )
     agent.work(task)  # first call: within band, allowed

@@ -9,6 +9,7 @@ from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.code_adapters import code_adapters_for
 from orac.council import Council, today_utc
+from orac.llm import Brain
 from orac.models import (
     CapabilityRequest,
     CapabilityResult,
@@ -74,6 +75,7 @@ class ToolBroker:
         store: BrokerStore,
         executor: RegularToolExecutor | None = None,
         repo_root: Path | str | None = None,
+        council_brain: "Brain | None" = None,
     ) -> "ToolBroker":
         """Build a broker whose grants and audit log live in SQLite.
 
@@ -81,14 +83,23 @@ class ToolBroker:
         to the audit log, and approval-gated tools route through the queue. When
         ``repo_root`` is given, the Builder's code adapters are registered,
         confined to that root.
+
+        ``council_brain`` activates the P5 cognition layer: the three judgement
+        lenses reason over consequential edges on this (local) model. ``None``
+        leaves the council at its deterministic floor.
         """
+        llm = None
+        if council_brain is not None:
+            from orac.lenses import LensReviewer  # noqa: PLC0415 (avoid import cycle)
+
+            llm = LensReviewer(brain=council_brain, store=store)
         return cls(
             executor=executor or RegularToolExecutor(),
             grants=store.grants(),
             known_tools=cls._known_tools(),
             adapters=cls._adapters(repo_root),
             store=store,
-            council=Council(store=store),
+            council=Council(store=store, llm=llm),
         )
 
     @staticmethod

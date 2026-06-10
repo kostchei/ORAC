@@ -15,6 +15,7 @@ from orac.agent_registry import (
     load_tool_specs,
 )
 from orac.intent_backbone import SPEC, IntentBackbone, IntentField
+from orac.intent_gate import IntentGate
 from orac.llm import build_brain
 from orac.model_policy import ModelPolicyStore, lmstudio_models, lmstudio_start, lmstudio_status
 from orac.models import Task, TaskStatus
@@ -24,6 +25,15 @@ from orac.storage import BoardStore
 from orac.task_registry import TaskRegistry
 from orac.ui_server import run_ui
 from orac.daemon import run_daemon
+
+# Friendly CLI names for the LM Studio model slots in model_policy.DEFAULT_POLICY.
+# "small" is the busy-box model and the model the council's LLM lenses run on.
+_MODEL_SLOTS = {
+    "standard": "lmstudio_standard_model",
+    "small": "lmstudio_small_model",
+    "code": "lmstudio_code_model",
+    "creative": "lmstudio_creative_model",
+}
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -95,6 +105,14 @@ def make_parser() -> argparse.ArgumentParser:
     models = subparsers.add_parser("models", help="Model routing and LM Studio operations.")
     models_sub = models.add_subparsers(dest="models_command", required=True)
     models_sub.add_parser("policy", help="Print current model routing decision.")
+    set_model = models_sub.add_parser(
+        "set", help="Set an LM Studio model slot (the 'small' slot is the council's lens model)."
+    )
+    set_model.add_argument(
+        "--slot", choices=sorted(_MODEL_SLOTS), required=True,
+        help="Which slot to set: standard (resident), small (busy-box + lenses), code, creative.",
+    )
+    set_model.add_argument("--model", required=True, help="LM Studio model key/name to assign.")
     models_sub.add_parser("lmstudio-status", help="Check LM Studio local server status.")
     models_sub.add_parser("lmstudio-models", help="List models visible to LM Studio server.")
     start = models_sub.add_parser("lmstudio-start", help="Start LM Studio local server.")
@@ -124,6 +142,11 @@ def make_parser() -> argparse.ArgumentParser:
         "--brain",
         choices=["auto", "rules", "ollama", "lmstudio", "foundation"],
         default="auto",
+    )
+    run.add_argument(
+        "--lenses",
+        action="store_true",
+        help="Enable the council's LLM lenses (local small model) on consequential edges.",
     )
 
     return parser
@@ -241,6 +264,7 @@ def cmd_intent_lock(store: BoardStore, args: argparse.Namespace) -> int:
         print(str(exc))
         print_intent_assessment(task)
         return 1
+    IntentGate().release(task)
     store.save(board)
     print_intent_assessment(task)
     return 0
@@ -348,6 +372,17 @@ def cmd_models_policy(store: BoardStore) -> int:
     return 0
 
 
+def cmd_models_set(store: BoardStore, args: argparse.Namespace) -> int:
+    policy_store = ModelPolicyStore(store)
+    policy = policy_store.load_policy()  # full current policy; mutate one slot, keep the rest
+    key = _MODEL_SLOTS[args.slot]
+    policy[key] = args.model
+    policy_store.save_policy(policy)
+    note = " — the council's LLM lenses will run on this model" if args.slot == "small" else ""
+    print(f"Set {key} = {args.model!r}{note}")
+    return 0
+
+
 def cmd_lmstudio_status() -> int:
     print(json.dumps(lmstudio_status(), indent=2, sort_keys=True))
     return 0
@@ -392,7 +427,7 @@ def cmd_scrum_run(store: BoardStore, args: argparse.Namespace) -> int:
         decision = None
         brain_name = args.brain
         model = None
-    scrum = Scrum(build_brain(brain_name, model=model), root=store.root)
+    scrum = Scrum(build_brain(brain_name, model=model), root=store.root, llm_lenses=args.lenses)
     result = scrum.run(board, cycles=args.cycles)
     store.save(board)
     if decision and decision.brain == "foundation" and result.touched_tasks:
@@ -452,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_audio_speak(args)
     if args.command == "models" and args.models_command == "policy":
         return cmd_models_policy(store)
+    if args.command == "models" and args.models_command == "set":
+        return cmd_models_set(store, args)
     if args.command == "models" and args.models_command == "lmstudio-status":
         return cmd_lmstudio_status()
     if args.command == "models" and args.models_command == "lmstudio-models":

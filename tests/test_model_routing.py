@@ -77,6 +77,38 @@ def test_model_for_work_kind_uses_slots() -> None:
     assert model_for_work_kind(policy, "code") == "gpt-oss-20b"
 
 
+def test_cli_models_set_persists_slot_and_preserves_others(tmp_path) -> None:
+    import argparse
+
+    from orac.cli import cmd_models_set
+
+    store = BoardStore(tmp_path)
+    store.init()
+    ModelPolicyStore(store).save_policy({"lmstudio_code_model": "qwen3-coder-next"})
+
+    rc = cmd_models_set(store, argparse.Namespace(slot="small", model="llama-3.2-3b"))
+
+    assert rc == 0
+    policy = ModelPolicyStore(store).load_policy()
+    assert policy["lmstudio_small_model"] == "llama-3.2-3b"  # the lens model is set
+    assert policy["lmstudio_code_model"] == "qwen3-coder-next"  # other slots untouched
+
+
+def test_lens_brain_uses_small_slot_with_structured_output(tmp_path) -> None:
+    from orac.model_policy import lens_brain
+
+    store = BoardStore(tmp_path)
+    store.init()
+    policy_store = ModelPolicyStore(store)
+    policy_store.save_policy({"lmstudio_small_model": "llama-3.2-3b"})
+
+    brain = lens_brain(policy_store)
+
+    assert isinstance(brain, LMStudioBrain)  # raw, no RulesBrain fallback
+    assert brain.model == "llama-3.2-3b"
+    assert callable(getattr(brain, "think_json", None))  # lenses need structured output
+
+
 def test_can_escalate_requires_key_and_budget(tmp_path, monkeypatch) -> None:
     store = BoardStore(tmp_path)
     store.init()

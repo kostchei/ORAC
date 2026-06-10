@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+import subprocess
+from dataclasses import dataclass, field
+
 import pytest
 
 from orac.agents import build_core_agents
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
 from orac.intent_backbone import IntentBackbone, IntentField
+from orac.intent_gate import IntentGate
 from orac.llm import RulesBrain
 from orac.models import Board, CapabilityRequest, CapabilityStatus, Task, TaskStatus
 from orac.scrum import Scrum
@@ -14,6 +19,46 @@ from orac.scrum import Scrum
 def _make_store(tmp_path) -> BrokerStore:
     (tmp_path / ".orac").mkdir()
     return BrokerStore(tmp_path).init()
+
+
+def _init_repo(tmp_path) -> BrokerStore:
+    """A real git repo with broker state under .orac, for the build path."""
+    (tmp_path / ".orac").mkdir()
+    (tmp_path / ".gitignore").write_text(".orac/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".gitignore"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    return BrokerStore(tmp_path).init()
+
+
+@dataclass
+class _ScriptedBrain:
+    """A stand-in model that replies from a fixed script (no think_json)."""
+
+    script: list[str]
+    prompts: list[str] = field(default_factory=list)
+
+    def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if not self.script:
+            raise AssertionError("scripted brain ran out of script")
+        return self.script.pop(0)
+
+
+def _builder_script(tmp_path) -> list[str]:
+    mod = str(tmp_path / "mod.py")
+    test = str(tmp_path / "test_mod.py")
+    return [
+        json.dumps({"tool": "git.create_branch", "args": {"root": str(tmp_path), "name": "build/x"}}),
+        json.dumps({"tool": "repo.write_file", "args": {"path": mod, "content": "def add(a, b):\n    return a + b\n"}}),
+        json.dumps({"tool": "repo.write_file", "args": {"path": test, "content": "from mod import add\n\ndef test_add():\n    assert add(1, 2) == 3\n"}}),
+        json.dumps({"tool": "git.commit", "args": {"root": str(tmp_path), "message": "add module", "paths": [mod, test]}}),
+        json.dumps({"tool": "repo.run_tests", "args": {"root": str(tmp_path), "target": test}}),
+        json.dumps({"done": True, "summary": "Added add() with a passing test on build/x."}),
+    ]
 
 
 def test_store_seeds_manifest_grants(tmp_path) -> None:
@@ -87,22 +132,24 @@ def test_resolve_unknown_pending_raises(tmp_path) -> None:
 
 
 def test_store_backed_scrum_loop_writes_audit_trail(tmp_path) -> None:
-    (tmp_path / ".orac").mkdir()
+    # A locked human task is released by the gate, then really built by the
+    # Builder session — every model choice routed through the broker and audited.
+    store = _init_repo(tmp_path)
     task = Task(title="Build the thing", description="Make it testable.")
     intent = IntentBackbone()
-    for field in IntentField:
-        intent.answer(task, field, f"{field.value} answer")
+    for field_name in IntentField:
+        intent.answer(task, field_name, f"{field_name.value} answer")
     intent.lock(task)
     board = Board(tasks=[task])
 
-    Scrum(RulesBrain(), root=tmp_path).run(board, cycles=3)
+    Scrum(_ScriptedBrain(_builder_script(tmp_path)), root=tmp_path).run(board, cycles=3)
 
     assert board.tasks[0].status == TaskStatus.DONE
-    log = BrokerStore(tmp_path).audit_log()
+    log = store.audit_log()
     assert log, "expected the routed tool calls to be audited"
     assert all(entry.status == CapabilityStatus.ALLOWED.value for entry in log)
     audited_tools = {entry.tool for entry in log}
-    assert {"minimal_path_planner", "verification_log", "handoff_tracker"} <= audited_tools
+    assert {"git.create_branch", "repo.run_tests", "git.commit"} <= audited_tools
 
 
 def test_fs_read_runs_without_approval(tmp_path) -> None:
@@ -144,9 +191,11 @@ def test_loop_parks_and_resumes_task_on_approval(tmp_path) -> None:
     store = _make_store(tmp_path)
     task = Task(title="Build the thing", description="Make it testable.")
     intent = IntentBackbone()
-    for field in IntentField:
-        intent.answer(task, field, f"{field.value} answer")
-    intent.lock(task)  # task now READY
+    for field_name in IntentField:
+        intent.answer(task, field_name, f"{field_name.value} answer")
+    intent.lock(task)
+    IntentGate().release(task)  # gate releases the locked task to READY
+    assert task.status == TaskStatus.READY
 
     # Park the task on an as-yet-unresolved approval, as the loop would.
     req = CapabilityRequest(agent="Simples", tool="fs_read", task_id=task.id)
@@ -158,10 +207,11 @@ def test_loop_parks_and_resumes_task_on_approval(tmp_path) -> None:
     Scrum(RulesBrain(), root=tmp_path).run(board, cycles=1)
     assert board.tasks[0].status == TaskStatus.PENDING_APPROVAL
 
-    # After approval, the loop resumes it from READY and drives it to DONE.
+    # After approval, the loop resumes it to the status it held before parking.
     store.resolve_pending(pending_id, "approved")
-    Scrum(RulesBrain(), root=tmp_path).run(board, cycles=3)
-    assert board.tasks[0].status == TaskStatus.DONE
+    Scrum(RulesBrain(), root=tmp_path).run(board, cycles=1)
+    assert board.tasks[0].status == TaskStatus.READY
+    assert "pending_approval" not in board.tasks[0].metadata
 
 
 def test_agent_work_parks_task_on_pending(tmp_path, monkeypatch) -> None:
@@ -180,7 +230,7 @@ def test_agent_work_parks_task_on_pending(tmp_path, monkeypatch) -> None:
         "orac.broker.approval_mode_for", lambda tool, args=None: ApprovalMode.APPROVE
     )
 
-    agent._apply_builtin_action = lambda t: bool(
+    agent._act = lambda t: bool(
         agent._use(t, "git.push", root=str(tmp_path))
     )
     agent.work(task)

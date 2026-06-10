@@ -153,7 +153,10 @@ def test_unlocked_task_stops_in_clarification() -> None:
     assert "Next question" in board.tasks[0].work_log[0].message
 
 
-def test_locked_intent_moves_task_to_done_with_core_agents() -> None:
+def test_locked_intent_is_released_to_ready_by_the_gate() -> None:
+    # The gate is the sole intent-axis mover: a locked task is released to
+    # READY with goal + work_kind + acceptance_criteria fixed, ready for its
+    # doer session. (The build itself needs a real model, exercised elsewhere.)
     task = Task(title="Build the thing", description="Make it testable.")
     intent = IntentBackbone()
     for field in IntentField:
@@ -162,17 +165,14 @@ def test_locked_intent_moves_task_to_done_with_core_agents() -> None:
     board = Board(tasks=[task])
     scrum = Scrum(RulesBrain())
 
-    result = scrum.run(board, cycles=3)
+    result = scrum.run(board, cycles=1)
 
     assert result.touched_tasks == 1
-    assert board.tasks[0].status == TaskStatus.DONE
-    assert board.tasks[0].assignee == "Simples"
+    assert board.tasks[0].status == TaskStatus.READY
+    assert board.tasks[0].work_kind == "code"
+    assert board.tasks[0].metadata["goal"]
     assert board.tasks[0].acceptance_criteria
-    agents = [entry.agent for entry in board.tasks[0].work_log]
-    assert "Intent" in agents
-    assert "Optimiser" in agents
-    assert "Simples" in agents
-    assert "Efficiency" in agents
+    assert any(entry.agent == "Intent" for entry in board.tasks[0].work_log)
 
 
 def test_sprint_plan_respects_capacity() -> None:

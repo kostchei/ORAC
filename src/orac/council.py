@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from orac.broker_store import BrokerStore
 from orac.models import (
@@ -13,6 +14,9 @@ from orac.models import (
     ReviewContext,
     TaskStatus,
 )
+
+if TYPE_CHECKING:
+    from orac.lenses import LensReviewer
 
 # P2/P3: the edge-check council, deterministic lenses only (design §4.2-§4.3).
 #
@@ -49,31 +53,37 @@ class Council:
     store: BrokerStore | None = None
     daily_rate_cap: int = DEFAULT_DAILY_RATE_CAP
     repeat_threshold: int = DEFAULT_REPEAT_THRESHOLD
+    # P5 cognition layer. None -> deterministic floor only (tests, no-DB path).
+    # When set, the three judgement lenses also reason over consequential edges.
+    llm: "LensReviewer | None" = None
 
     def review(self, ctx: ReviewContext) -> CouncilVerdict:
-        verdicts = (
+        verdicts: list[LensVerdict] = [
             self._intent(ctx),
             self._optimise(ctx),
             self._simples(ctx),
             self._efficiency(ctx),
-        )
+        ]
+        if self.llm is not None and self.llm.applies(ctx):
+            verdicts.extend(self.llm.review(ctx))
+        lenses = tuple(verdicts)
         blocks = [v for v in verdicts if v.decision is LensDecision.BLOCK]
         escalations = [v for v in verdicts if v.decision is LensDecision.ESCALATE]
         if blocks:
             return CouncilVerdict(
                 status=CapabilityStatus.DENIED,
-                lenses=verdicts,
+                lenses=lenses,
                 reason="; ".join(v.reason for v in blocks),
             )
         if escalations:
             return CouncilVerdict(
                 status=CapabilityStatus.PENDING,
-                lenses=verdicts,
+                lenses=lenses,
                 reason="; ".join(v.reason for v in escalations),
             )
         return CouncilVerdict(
             status=CapabilityStatus.ALLOWED,
-            lenses=verdicts,
+            lenses=lenses,
             reason="council: all lenses pass",
         )
 
