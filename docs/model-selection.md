@@ -64,18 +64,19 @@ stabilise, and reads the text back.
 **One-time setup**
 
 ```
-# 1. Install playwright (no browser download needed — uses your Chrome)
-pip install playwright
-
-# 2. Start Chrome with the debugging port open
+# 1. Start Chrome with the debugging port open
 chrome --remote-debugging-port=9222 --no-first-run
 
-# 3. Log into claude.ai / gemini.google.com / chatgpt.com in that browser
+# 2. Log into claude.ai / gemini.google.com / chatgpt.com in that browser
 
-# 4. Tell ORAC to use it
+# 3. Tell ORAC to use it
 $env:ORAC_BROWSER_FOUNDATION = "claude"   # PowerShell
 export ORAC_BROWSER_FOUNDATION=claude     # bash/zsh
 ```
+
+ORAC uses its own small `orac.browser_primitive` CDP/WebSocket client for the
+browser tab operations, so browser foundation no longer requires Playwright or a
+third-party websocket package.
 
 Or set `browser_foundation_provider` in `.orac/config.json → model_policy`.
 

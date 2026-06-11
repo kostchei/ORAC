@@ -78,16 +78,15 @@ _STREAMING_SELECTORS: dict[str, str | None] = {
 }
 
 
-# The playwright entry-point is imported lazily so the rest of the module
-# loads even when playwright is not installed.  Tests patch this function.
-def _sync_playwright() -> Any:
-    try:
-        from playwright.sync_api import sync_playwright  # noqa: PLC0415
-    except ImportError as exc:
-        raise RuntimeError(
-            "playwright is not installed — run: pip install playwright"
-        ) from exc
-    return sync_playwright()
+def _open_browser_page(cdp_url: str, *, timeout: float = 30.0) -> Any:
+    """Return ORAC's dependency-free CDP page primitive.
+
+    Kept as a small seam for tests and for future browser primitives; it avoids
+    importing Playwright or any third-party websocket package on the hot path.
+    """
+    from orac.browser_primitive import open_cdp_page  # noqa: PLC0415
+
+    return open_cdp_page(cdp_url, timeout=timeout)
 
 
 # Brain implementation ---------------------------------------------------------
@@ -106,8 +105,11 @@ class BrowserFoundationBrain:
     -------------
     1. Chrome (or Edge) started with --remote-debugging-port=9222.
        Shortcut: ``chrome --remote-debugging-port=9222 --no-first-run``
-    2. ``pip install playwright``  (no browser binary download needed).
-    3. The browser must already be logged in to the chosen provider.
+    2. The browser must already be logged in to the chosen provider.
+
+    ORAC talks to Chrome directly through a tiny local CDP primitive
+    (``orac.browser_primitive``); no Playwright or browser automation package is
+    required.
 
     The CDP URL and provider can also be set via env vars ORAC_CDP_URL and
     ORAC_BROWSER_FOUNDATION.
@@ -162,22 +164,20 @@ class BrowserFoundationBrain:
         )
 
     def _send_and_receive(self, text: str) -> str:
-        ctx = _sync_playwright()
-        with ctx as pw:
-            try:
-                browser = pw.chromium.connect_over_cdp(self.cdp_url)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Cannot connect to Chrome at {self.cdp_url}. "
-                    "Start Chrome with: chrome --remote-debugging-port=9222 --no-first-run"
-                ) from exc
-
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = context.new_page()
-            try:
-                return self._chat(page, text)
-            finally:
-                page.close()
+        try:
+            ctx = _open_browser_page(self.cdp_url, timeout=30.0)
+            with ctx as page:
+                try:
+                    return self._chat(page, text)
+                finally:
+                    page.close()
+        except Exception as exc:
+            if isinstance(exc, (TimeoutError, ValueError)):
+                raise
+            raise RuntimeError(
+                f"Cannot connect to Chrome at {self.cdp_url}. "
+                "Start Chrome with: chrome --remote-debugging-port=9222 --no-first-run"
+            ) from exc
 
     def _chat(self, page: Any, text: str) -> str:
         url = _PROVIDER_URLS.get(self.provider)
@@ -346,7 +346,7 @@ def ensure_browser_foundation_ready(
     policy: dict[str, Any],
     orac_root: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Ensure playwright is installed and Chrome is reachable via CDP.
+    """Ensure Chrome is reachable via CDP for the local browser primitive.
 
     Called once at daemon/UI startup when ``browser_foundation_provider`` is
     set.  Launches Chrome into a persistent ORAC-owned profile
@@ -356,21 +356,9 @@ def ensure_browser_foundation_ready(
 
     Returns a status dict with ``ok``, ``action``, and ``message`` keys.
     """
-    # 1. Ensure playwright is importable; install if missing.
-    try:
-        import playwright  # noqa: F401
-    except ImportError:
-        from orac.dependency_installer import install_playwright  # noqa: PLC0415
-
-        result = install_playwright()
-        if not result.ok:
-            return {
-                "ok": False,
-                "action": "playwright_install_failed",
-                "message": result.output[-500:],
-            }
-
-    # 2. CDP already running — nothing to do.
+    # 1. CDP already running — nothing to do. The browser driver itself is
+    # dependency-free and lives in orac.browser_primitive, so there is no package
+    # installation gate before this check.
     cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
     if cdp_reachable(cdp_url):
         return {
@@ -379,7 +367,7 @@ def ensure_browser_foundation_ready(
             "message": "Chrome CDP already reachable.",
         }
 
-    # 3. Find the Chrome / Edge executable.
+    # 2. Find the Chrome / Edge executable.
     chrome = find_chrome()
     if not chrome:
         return {
@@ -390,7 +378,7 @@ def ensure_browser_foundation_ready(
             ),
         }
 
-    # 4. Build the profile directory (persists logins between restarts).
+    # 3. Build the profile directory (persists logins between restarts).
     root = Path(orac_root) if orac_root else Path(".")
     profile_dir = root / ".orac" / "chrome-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -401,7 +389,7 @@ def ensure_browser_foundation_ready(
     except OSError as exc:
         return {"ok": False, "action": "launch_failed", "message": str(exc)}
 
-    # 5. Wait up to 15 s for the CDP endpoint to come up.
+    # 4. Wait up to 15 s for the CDP endpoint to come up.
     for _ in range(15):
         time.sleep(1.0)
         if cdp_reachable(cdp_url):

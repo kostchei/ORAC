@@ -20,7 +20,7 @@ from orac.storage import BoardStore
 
 
 # ---------------------------------------------------------------------------
-# Playwright mock helpers
+# Browser primitive mock helpers
 # ---------------------------------------------------------------------------
 
 # Known streaming selectors (absent = streaming finished).
@@ -28,7 +28,7 @@ _STREAMING_SELS = {"[data-is-streaming]", ".result-streaming"}
 
 
 def _make_page(response_el_text: str = "the answer", provider: str = "claude") -> MagicMock:
-    """Build a mock playwright Page for the two-phase wait flow.
+    """Build a mock browser Page for the two-phase wait flow.
 
     query_selector_all behaviour:
     - streaming selectors → always [] (streaming already done)
@@ -57,19 +57,12 @@ def _make_page(response_el_text: str = "the answer", provider: str = "claude") -
     return page
 
 
-def _make_playwright_cm(page: MagicMock) -> MagicMock:
-    """Return a context-manager mock that yields a playwright-like object."""
-    browser = MagicMock()
-    context = MagicMock()
-    context.new_page.return_value = page
-    browser.contexts = [context]
-
-    pw = MagicMock()
-    pw.chromium.connect_over_cdp.return_value = browser
+def _make_page_cm(page: MagicMock) -> MagicMock:
+    """Return a context-manager mock that yields ORAC's local CDP page."""
 
     @contextmanager
-    def cm():
-        yield pw
+    def cm(*_args: object, **_kwargs: object):
+        yield page
 
     return cm
 
@@ -82,7 +75,7 @@ def _make_playwright_cm(page: MagicMock) -> MagicMock:
 def test_think_sends_prompt_and_returns_response(monkeypatch) -> None:
     task = Task(title="test-task", status=TaskStatus.IN_PROGRESS)
     page = _make_page(response_el_text="AI result", provider="claude")
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
 
     brain = BrowserFoundationBrain(
         provider="claude", stabilise_seconds=0, poll_interval=0
@@ -107,7 +100,7 @@ def test_think_json_appends_schema_instructions(monkeypatch) -> None:
         captured.append(text)
 
     page.keyboard.type.side_effect = fake_type
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
 
     brain = BrowserFoundationBrain(
         provider="claude", stabilise_seconds=0, poll_interval=0
@@ -130,7 +123,7 @@ def test_provider_url_dispatched_correctly(monkeypatch) -> None:
         ("openai", "https://chatgpt.com"),
     ]:
         page = _make_page()
-        monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+        monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
         brain = BrowserFoundationBrain(
             provider=provider, stabilise_seconds=0, poll_interval=0
         )
@@ -143,7 +136,7 @@ def test_provider_url_dispatched_correctly(monkeypatch) -> None:
 def test_unknown_provider_raises(monkeypatch) -> None:
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
     page = _make_page()
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
 
     brain = BrowserFoundationBrain(
         provider="myspace", stabilise_seconds=0, poll_interval=0
@@ -155,14 +148,10 @@ def test_unknown_provider_raises(monkeypatch) -> None:
 def test_cdp_connection_failure_raises_runtime_error(monkeypatch) -> None:
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
 
-    pw = MagicMock()
-    pw.chromium.connect_over_cdp.side_effect = OSError("connection refused")
+    def fail_open(*_args: object, **_kwargs: object) -> object:
+        raise OSError("connection refused")
 
-    @contextmanager
-    def cm():
-        yield pw
-
-    monkeypatch.setattr(bb, "_sync_playwright", cm)
+    monkeypatch.setattr(bb, "_open_browser_page", fail_open)
 
     brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
     with pytest.raises(RuntimeError, match="Cannot connect to Chrome"):
@@ -185,7 +174,7 @@ def test_send_button_fallback_to_enter_when_not_found(monkeypatch) -> None:
         return MagicMock()
 
     page.wait_for_selector.side_effect = wfs
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
     brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
     brain.think("builder", "doer", task, "hi")
     page.keyboard.press.assert_any_call("Enter")
@@ -199,7 +188,7 @@ def test_phase2_timeout_when_response_never_appears(monkeypatch) -> None:
     page.query_selector_all.return_value = []
     page.wait_for_selector.return_value = MagicMock()
 
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
     brain = BrowserFoundationBrain(
         provider="claude",
         timeout_seconds=1,
@@ -214,7 +203,7 @@ def test_gemini_uses_text_stability_not_streaming_selector(monkeypatch) -> None:
     """Gemini has no streaming selector — falls back to text-stability polling."""
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
     page = _make_page(response_el_text="gemini answer", provider="gemini")
-    monkeypatch.setattr(bb, "_sync_playwright", _make_playwright_cm(page))
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
     brain = BrowserFoundationBrain(
         provider="gemini", stabilise_seconds=0, poll_interval=0
     )
@@ -408,28 +397,21 @@ def test_ensure_ready_launch_timeout(tmp_path, monkeypatch) -> None:
     assert result["action"] == "launch_timeout"
 
 
-def test_ensure_ready_playwright_missing_triggers_install(tmp_path, monkeypatch) -> None:
-    # Simulate playwright not installed.
+def test_ensure_ready_does_not_require_playwright(tmp_path, monkeypatch) -> None:
+    # The browser foundation now uses ORAC's local CDP primitive, so startup should
+    # not import or install playwright before checking CDP.
     import builtins
     real_import = builtins.__import__
 
     def mock_import(name: str, *args, **kwargs):  # type: ignore[override]
         if name == "playwright":
-            raise ImportError("no module named playwright")
+            raise AssertionError("playwright should not be imported")
         return real_import(name, *args, **kwargs)
 
-    install_called: list[bool] = []
-
-    def fake_install():
-        from orac.dependency_installer import InstallResult
-        install_called.append(True)
-        return InstallResult(ok=True, command=[], output="installed")
-
     monkeypatch.setattr(builtins, "__import__", mock_import)
-    monkeypatch.setattr("orac.dependency_installer.install_playwright", fake_install)
     monkeypatch.setattr(bb, "cdp_reachable", lambda _url: True)
 
     policy = {"browser_cdp_url": "http://localhost:9222", "browser_foundation_provider": "claude"}
     result = ensure_browser_foundation_ready(policy, orac_root=tmp_path)
-    assert install_called
     assert result["ok"] is True
+    assert result["action"] == "already_running"
