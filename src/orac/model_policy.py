@@ -359,7 +359,9 @@ def lmstudio_start(port: int = 1234) -> tuple[bool, str]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
-    output = (completed.stdout + completed.stderr).strip()
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    output = (stdout + stderr).strip()
     return completed.returncode == 0, output
 
 
@@ -375,7 +377,9 @@ def lmstudio_load_model(model_key: str, identifier: str = "orac-local") -> tuple
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
-    output = (completed.stdout + completed.stderr).strip()
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    output = (stdout + stderr).strip()
     return completed.returncode == 0, output
 
 

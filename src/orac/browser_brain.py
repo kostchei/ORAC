@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+from importlib.util import find_spec
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -356,18 +357,38 @@ def ensure_browser_foundation_ready(
 
     Returns a status dict with ``ok``, ``action``, and ``message`` keys.
     """
-    # 1. CDP already running — nothing to do. The browser driver itself is
-    # dependency-free and lives in orac.browser_primitive, so there is no package
-    # installation gate before this check.
+    def ensure_playwright() -> str | None:
+        """Best-effort Playwright bootstrap; return a warning when unavailable."""
+        # Browser startup status should still report the actionable Chrome/CDP
+        # state when package installation is blocked by the environment. The
+        # actual BrowserFoundationBrain import path still raises if Playwright is
+        # unavailable when a browser-backed request is executed.
+        # 1. Ensure playwright is discoverable; install if missing.
+        if find_spec("playwright") is None:
+            from orac.dependency_installer import install_playwright  # noqa: PLC0415
+
+            result = install_playwright()
+            if not result.ok:
+                return f"Playwright install failed: {result.output[-500:]}"
+        return None
+
     cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
+
+    # 1. CDP already running — nothing to do beyond a best-effort dependency
+    # check for the eventual BrowserFoundationBrain connection.
     if cdp_reachable(cdp_url):
+        warning = ensure_playwright()
+        message = "Chrome CDP already reachable."
+        if warning:
+            message = f"{message} {warning}"
         return {
             "ok": True,
             "action": "already_running",
-            "message": "Chrome CDP already reachable.",
+            "message": message,
         }
 
-    # 2. Find the Chrome / Edge executable.
+    # 2. Find the Chrome / Edge executable before attempting network-backed
+    # dependency installation; without Chrome there is nothing useful to launch.
     chrome = find_chrome()
     if not chrome:
         return {
@@ -378,6 +399,7 @@ def ensure_browser_foundation_ready(
             ),
         }
 
+    warning = ensure_playwright()
     # 3. Build the profile directory (persists logins between restarts).
     root = Path(orac_root) if orac_root else Path(".")
     profile_dir = root / ".orac" / "chrome-profile"
@@ -394,14 +416,17 @@ def ensure_browser_foundation_ready(
         time.sleep(1.0)
         if cdp_reachable(cdp_url):
             provider = str(policy.get("browser_foundation_provider", ""))
+            message = (
+                f"Chrome launched (provider={provider}, port={cdp_port}).  "
+                f"Log in at the opened browser window if this is the first run.  "
+                f"Profile: {profile_dir}"
+            )
+            if warning:
+                message = f"{message} {warning}"
             return {
                 "ok": True,
                 "action": "launched",
-                "message": (
-                    f"Chrome launched (provider={provider}, port={cdp_port}).  "
-                    f"Log in at the opened browser window if this is the first run.  "
-                    f"Profile: {profile_dir}"
-                ),
+                "message": message,
                 "profile_dir": str(profile_dir),
             }
 

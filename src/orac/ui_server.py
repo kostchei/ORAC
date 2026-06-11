@@ -81,6 +81,15 @@ class UIRuntime:
             "last_error": self.last_error,
         }
 
+    def record_tick(self, result: Any, decision: Any) -> dict[str, Any]:
+        self.last_tick = {
+            "result": asdict(result),
+            "model_decision": decision.to_dict(),
+            "at": time.time(),
+        }
+        self.last_error = None
+        return self.last_tick
+
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
@@ -107,12 +116,7 @@ class UIRuntime:
                 self.store.save(board)
                 if decision.brain == "foundation" and result.touched_tasks:
                     policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
-                self.last_tick = {
-                    "result": asdict(result),
-                    "model_decision": decision.to_dict(),
-                    "at": time.time(),
-                }
-                self.last_error = None
+                self.record_tick(result, decision)
                 interval = int(policy["daemon_interval_seconds"])
             except Exception as exc:
                 self.last_error = str(exc)
@@ -191,6 +195,7 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                 store.save(board)
                 if decision.brain == "foundation" and result.touched_tasks:
                     policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
+                runtime.record_tick(result, decision)
                 self._send_json({"result": asdict(result), "model_decision": decision.to_dict()})
                 return
             if self.path == "/api/audio/transcribe":

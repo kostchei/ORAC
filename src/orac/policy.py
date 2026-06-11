@@ -162,10 +162,10 @@ _PATH_BEARING_TOOLS: dict[str, str] = {
 
 
 def _normalise(raw: str) -> str:
-    # pathlib.Path only treats the current platform's separator as structural; on
-    # Linux, a Windows path such as D:\Code\ORAC\src\orac\council.py is one
-    # filename and ``as_posix`` preserves the backslashes. Normalise separators
-    # first so the suffix-on-boundary safety gate works for both Windows and POSIX
+    # pathlib only treats backslashes as separators on Windows. Normalize them
+    # explicitly so the safety gate still catches Windows paths when ORAC is
+    # running on POSIX (e.g. in CI or a Linux container reviewing a Windows path),
+    # and the suffix-on-boundary safety gate works for both Windows and POSIX
     # forms regardless of where ORAC is running.
     return Path(raw.replace("\\", "/")).as_posix()
 
