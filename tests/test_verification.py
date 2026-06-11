@@ -128,7 +128,7 @@ def test_doer_kind_must_declare_a_verifier(tmp_path) -> None:
     WORK_KINDS["code"] = WorkKindSpec(
         kind="code", doer_slug="builder",
         done_means=original.done_means, contract_rules=original.contract_rules,
-        verifier=None,
+        verifiers=(),
     )
     try:
         try:
@@ -151,4 +151,4 @@ def test_every_doer_bearing_kind_has_a_verifier() -> None:
     # verifier (the doer claims done; something else must confirm it).
     for spec in WORK_KINDS.values():
         if spec.doer_slug is not None:
-            assert spec.verifier is not None, f"{spec.kind} has a doer but no verifier"
+            assert spec.verifiers, f"{spec.kind} has a doer but no verifier"

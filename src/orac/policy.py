@@ -53,6 +53,9 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # Running tests executes repo code, but it is local and part of the trusted
     # build loop; treated as reversible-local rather than spamming notifications.
     "repo.run_tests": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # Verifying a local app navigates a browser and reads the page: read-only and
+    # local, the frontend twin of run_tests. No file path, so not safety-critical.
+    "browser.verify_local_app": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     # Writes are reversible because the Builder works checkpoint-first (branch +
     # commit before changing files).
     "repo.write_file": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),

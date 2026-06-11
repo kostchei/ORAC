@@ -145,6 +145,12 @@
       "inputs": ["task_id", "root", "target"]
     },
     {
+      "name": "browser.verify_local_app",
+      "description": "Navigate a running local app via Chrome CDP and confirm it loaded with content.",
+      "regular_use": "Builder verifies a UI change renders before it can reach done.",
+      "inputs": ["task_id", "app_url", "cdp_url"]
+    },
+    {
       "name": "git.create_branch",
       "description": "Create and check out a git branch in an approved repo root.",
       "regular_use": "Builder checkpoints before changing files (engineered reversibility).",

@@ -66,8 +66,13 @@ Ordered; each step keeps the suite green.
       accepts a completed action; `orac rollback <id> [--push]` git-reverts the recorded commit
       under the `human` audit principal, then acks. `git.push` now records the pushed head sha +
       branch so rollback has a target; a notification with no recorded sha fails closed.
-- [ ] **`browser.verify_local_app`** — verification before a task may reach `done` (see Build
-      order item 2 below).
+- [x] **`browser.verify_local_app`** — the frontend twin of the test verifier. A `code` goal that
+      changes the UI carries its running `app_url` in context; before `DONE`, the Builder drives the
+      app through the dependency-free CDP primitive (`browser_adapters.verify_local_app`) and
+      confirms it loaded with non-empty content — a blank or unreachable app blocks the task instead
+      of being trusted on the doer's word. `WorkKindSpec.verifiers` is now a sequence (run_tests
+      always; verify_local_app additionally, a no-op pass on a backend-only goal with no `app_url`).
+      Read-only/local: classified `auto`, never parks. (Closes the last open Milestone A box.)
 
 **Exit criterion for Milestone A:** idle ORAC picks a self-improvement task, branches, applies a
 patch, runs tests, and opens the change for human approval — end-to-end through the council, with
@@ -95,16 +100,17 @@ category starts until item 4 has produced real evidence.
    approval surface. Path matching is suffix-on-boundary so relative and absolute (Windows or
    POSIX) forms both match while lookalikes do not. **Closed the last open-decisions row blocking
    an unattended run.**
-2. **Verification before `done`.** **Done (general case).** `run_goal_task` no longer trusts a
+2. **Verification before `done`.** **Done.** `run_goal_task` no longer trusts a
    doer session's self-reported "done": it calls `verify_goal_done`, which confirms the kind's
-   own done-means independently before flipping `DONE`. For `code` the verifier (`run_tests`)
-   re-runs the suite through the broker on the built branch and refuses `done` if it is red or
-   unrunnable — the task blocks with the failure detail instead (catches the most likely live-fire
-   failure: a local model declaring victory early). A `WorkKindSpec.verifier` field carries the
-   check, and a doer-bearing kind without a verifier now raises at spawn (a doer can claim done,
-   so something else must confirm it). **Remaining:** `browser.verify_local_app` — the frontend
-   instance of the same step (reuse `browser_brain.py`'s local CDP primitive); this is the
-   last open Milestone A checkbox.
+   own done-means independently before flipping `DONE`. For `code` the verifiers run in order and
+   all must pass: `run_tests` re-runs the suite through the broker on the built branch and refuses
+   `done` if it is red or unrunnable; `browser.verify_local_app` then drives the running app
+   (when the goal carries an `app_url`) through the dependency-free CDP primitive and refuses
+   `done` if it is blank or unreachable — the task blocks with the failure detail instead (catches
+   the most likely live-fire failure: a local model declaring victory early). `WorkKindSpec.verifiers`
+   is a sequence; a verifier that does not apply to a goal (the UI check on a backend-only change)
+   is a no-op pass. A doer-bearing kind with no verifier raises at spawn (a doer can claim done, so
+   something else must confirm it). **This closes the last open Milestone A checkbox.**
 3. **P6 — notify transport + standing grants.** **Standing grants: done.**
    `BrokerStore.create_standing_grant / list_standing_grants / revoke_standing_grant /
    standing_grant_for` + broker integration: a standing grant pre-authorises one `(agent, tool)`

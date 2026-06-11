@@ -45,10 +45,12 @@ class WorkKindSpec:
     doer_slug: str | None          # sole doer role; None = no doer exists yet
     done_means: str                # what verification looks like for this kind
     contract_rules: str            # working rules injected into the contract
-    # How the kind's done-means is independently confirmed before DONE. None =
-    # no verifier yet; a kind cannot have a doer without one (the doer can claim
-    # done, so something other than the doer must check it). Enforced below.
-    verifier: str | None = None
+    # How the kind's done-means is independently confirmed before DONE. Empty =
+    # no verifier yet; a kind cannot have a doer without at least one (the doer
+    # can claim done, so something other than the doer must check it). Every
+    # listed verifier must pass; a verifier that does not apply to a given goal
+    # (e.g. a UI check on a backend-only change) passes as a no-op. Enforced below.
+    verifiers: tuple[str, ...] = ()
 
 
 CONTRACT_TEMPLATE = """\
@@ -76,9 +78,14 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
             "before changing files.\n"
             "- Write only inside the repo root given in CONTEXT.\n"
             "- One logical change per commit, with explicit paths.\n"
-            "- Run the tests; you are not done until they pass."
+            "- Run the tests; you are not done until they pass.\n"
+            "- For a UI change, leave the local app running and name its URL so "
+            "the change can be verified in a browser."
         ),
-        verifier="run_tests",  # re-run the suite on the built branch; red => not done
+        # run_tests always re-runs the suite on the built branch (red => not done);
+        # verify_local_app additionally drives the running app when the goal is a
+        # UI change (context carries app_url), and is a no-op pass otherwise.
+        verifiers=("run_tests", "verify_local_app"),
     ),
     "comms": WorkKindSpec(
         kind="comms",
@@ -146,7 +153,7 @@ def run_goal_task(
     # A kind with a doer must also declare how its done-means is verified: the
     # doer claims done, so something other than the doer must confirm it. A doer
     # without a verifier is a design hole, surfaced loudly rather than trusted.
-    if spec.doer_slug is not None and spec.verifier is None:
+    if spec.doer_slug is not None and not spec.verifiers:
         raise ValueError(
             f"work kind {spec.kind!r} has a doer but no verifier; a doer that can "
             "claim done needs an independent check before DONE is granted."
@@ -391,27 +398,6 @@ def settle_parent_against_ledger(parent: Task) -> None:
         )
 
 
-# Verifier name -> how it confirms a kind's done-means. The check runs through
-# the broker (audited, no privileged path) as the doer agent.
-def verify_goal_done(
-    spec: WorkKindSpec,
-    child: Task,
-    broker: ToolBroker,
-    context: dict[str, Any],
-) -> tuple[bool, str]:
-    """Independently confirm the kind's done-means. Returns (ok, detail).
-
-    Only invoked when a doer session claimed done, so ``spec.verifier`` is set
-    (the doer/verifier invariant is enforced at spawn). An unknown verifier name
-    is a configuration fault, not a silent pass.
-    """
-    if spec.verifier == "run_tests":
-        return _verify_run_tests(spec, child, broker, context)
-    raise ValueError(
-        f"work kind {spec.kind!r} names unknown verifier {spec.verifier!r}."
-    )
-
-
 def _verify_run_tests(
     spec: WorkKindSpec,
     child: Task,
@@ -440,3 +426,83 @@ def _verify_run_tests(
     if passed:
         return True, "tests passed"
     return False, summary or "tests failed"
+
+
+def _verify_local_app(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Drive the running local app and confirm it renders, for a UI change.
+
+    Applicability is the presence of ``app_url`` in context: a UI goal leaves
+    the app running and names its URL, a backend-only goal does not. With no
+    ``app_url`` this is a no-op pass — the run_tests verifier still gates the
+    change. When it does apply, the browser tool navigates to the app through the
+    local CDP primitive and checks the page loaded with non-empty content; a
+    blank or unreachable app blocks the task rather than reaching DONE on the
+    doer's word.
+    """
+    app_url = context.get("app_url")
+    if not app_url:
+        return True, "no app_url in context (not a UI change); skipped"
+    doer = WORK_KINDS[spec.kind].doer_slug
+    profiles = {profile.slug: profile for profile in load_agent_profiles()}
+    agent_name = profiles[doer].name if doer in profiles else "Builder"
+    args: dict[str, Any] = {"app_url": str(app_url)}
+    if context.get("cdp_url"):
+        args["cdp_url"] = str(context["cdp_url"])
+    result = broker.request(
+        CapabilityRequest(
+            agent=agent_name,
+            tool="browser.verify_local_app",
+            task_id=child.id,
+            args=args,
+        ),
+        child,
+    )
+    if result.status is not CapabilityStatus.ALLOWED:
+        return False, f"could not verify app ({result.status.value}): {result.message}"
+    if bool(result.data.get("verified")):
+        return True, str(result.data.get("summary", "app verified"))
+    return False, str(result.data.get("summary", "")) or "app did not verify"
+
+
+# Verifier name -> how it confirms a kind's done-means. The check runs through
+# the broker (audited, no privileged path) as the doer agent. Defined after the
+# helpers so the registry binds real callables at import time.
+_VERIFIERS = {
+    "run_tests": _verify_run_tests,
+    "verify_local_app": _verify_local_app,
+}
+
+
+def verify_goal_done(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Independently confirm the kind's done-means. Returns (ok, detail).
+
+    Only invoked when a doer session claimed done, so ``spec.verifiers`` is
+    non-empty (the doer/verifier invariant is enforced at spawn). Every verifier
+    must pass; the first failure short-circuits with its detail. A verifier that
+    does not apply to this goal (e.g. the UI check on a backend-only change)
+    returns a no-op pass. An unknown verifier name is a configuration fault, not
+    a silent pass.
+    """
+    details: list[str] = []
+    for name in spec.verifiers:
+        try:
+            run = _VERIFIERS[name]
+        except KeyError as exc:
+            raise ValueError(
+                f"work kind {spec.kind!r} names unknown verifier {name!r}."
+            ) from exc
+        ok, detail = run(spec, child, broker, context)
+        if not ok:
+            return False, detail
+        details.append(f"{name}: {detail}")
+    return True, "; ".join(details)

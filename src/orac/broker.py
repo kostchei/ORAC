@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orac.adapters import Adapter, default_adapters
+from orac.browser_adapters import browser_adapters
 from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.code_adapters import code_adapters_for
@@ -105,6 +106,9 @@ class ToolBroker:
     @staticmethod
     def _adapters(repo_root: Path | str | None) -> dict[str, Adapter]:
         adapters = default_adapters()
+        # Read-only, repo-independent: the frontend verifier needs only a running
+        # browser, not an approved repo root, so it is always available.
+        adapters.update(browser_adapters())
         if repo_root is not None:
             adapters.update(code_adapters_for((repo_root,)))
         return adapters
