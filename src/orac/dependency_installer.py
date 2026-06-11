@@ -15,22 +15,6 @@ class InstallResult:
         return asdict(self)
 
 
-def install_playwright() -> InstallResult:
-    """Install the playwright package (no browser binary needed — uses CDP attach)."""
-    command = [sys.executable, "-m", "pip", "install", "playwright"]
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return InstallResult(False, command, str(exc))
-    output = (completed.stdout + "\n" + completed.stderr).strip()
-    return InstallResult(completed.returncode == 0, command, output[-6000:])
-
-
 def install_audio_stack() -> InstallResult:
     command = [
         sys.executable,

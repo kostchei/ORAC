@@ -103,7 +103,7 @@ category starts until item 4 has produced real evidence.
    failure: a local model declaring victory early). A `WorkKindSpec.verifier` field carries the
    check, and a doer-bearing kind without a verifier now raises at spawn (a doer can claim done,
    so something else must confirm it). **Remaining:** `browser.verify_local_app` — the frontend
-   instance of the same step (reuse `browser_brain.py`'s Playwright/CDP plumbing); this is the
+   instance of the same step (reuse `browser_brain.py`'s local CDP primitive); this is the
    last open Milestone A checkbox.
 3. **P6 — notify transport + standing grants.** **Standing grants: done.**
    `BrokerStore.create_standing_grant / list_standing_grants / revoke_standing_grant /
