@@ -6,6 +6,8 @@ from typing import Any
 from orac.agent_registry import load_agent_profiles
 from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
+from orac.broker_store import MAX_SUBAGENTS
+from orac.dispatch import ACTIVE_SLICE_CEILING, both_agree
 from orac.intent_ledger import (
     SLICE_BLOCKED,
     SLICE_SATISFIED,
@@ -258,6 +260,8 @@ def run_decomposed_goal(
     broker: ToolBroker,
     context: dict[str, Any],
     max_steps: int = 16,
+    resource_slice: float = DEFAULT_RESOURCE_SLICE,
+    band: float = ACTIVE_SLICE_CEILING,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
@@ -272,6 +276,22 @@ def run_decomposed_goal(
     open_ledger(parent, intent, decomposition)
     children: list[Task] = []
     for index, slice_ in enumerate(slices(parent)):
+        # (e) both-must-agree gate: the slice is from an approved plan
+        # (Orchestrator proposed), but Optimise must also have a free slot and
+        # band room. A refused spawn defers the slice (stays open), not an error.
+        if broker.store is not None:
+            decision = both_agree(
+                broker.store,
+                orchestrator_proposed=True,
+                resource_slice=resource_slice,
+                band=band,
+            )
+            if not decision.agreed:
+                parent.add_log(
+                    "Optimise",
+                    f"Spawn of {slice_['sub_intent']!r} deferred: {decision.reason}",
+                )
+                continue
         child = run_goal_task(
             board=board,
             parent=parent,
@@ -283,6 +303,7 @@ def run_decomposed_goal(
             context=context,
             max_steps=max_steps,
             intent=slice_["sub_intent"],
+            resource_slice=resource_slice,
         )
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
@@ -295,6 +316,55 @@ def run_decomposed_goal(
 
     settle_parent_against_ledger(parent)
     return children
+
+
+def run_orchestrated_goal(
+    board: Board,
+    parent: Task,
+    goal: str,
+    intent: str,
+    work_kind: str,
+    brain: Brain,
+    broker: ToolBroker,
+    context: dict[str, Any],
+    max_steps: int = 16,
+    cap: int = MAX_SUBAGENTS,
+    band: float = ACTIVE_SLICE_CEILING,
+) -> list[Task]:
+    """The full fan-out: propose a decomposition (with the abundance frame),
+    review the plan (the counterweight), then dispatch each slice through the
+    both-agree gate, tracking the intent ledger.
+
+    Ties (c) the frame, (d) plan-review, (e) the dispatch gate, and (b) the
+    ledger into one entry. A plan the review rejects does not spawn anything —
+    the parent blocks with the lens reasons, a visible signal to re-plan, rather
+    than running an unreviewed fan-out.
+    """
+    from orac.orchestrator import propose_decomposition  # noqa: PLC0415 (cycle)
+    from orac.plan_review import review_decomposition  # noqa: PLC0415
+
+    if broker.store is None:
+        raise ValueError("run_orchestrated_goal needs a store-backed broker.")
+
+    slices_plan = propose_decomposition(goal, intent, broker.store, brain, cap=cap, task=parent)
+    verdict = review_decomposition(intent, slices_plan, brain, task=parent)
+    if verdict.status is not CapabilityStatus.ALLOWED:
+        parent.add_log(
+            "Orchestrator",
+            f"Decomposition not accepted by plan review ({verdict.status.value}): "
+            f"{verdict.reason}",
+        )
+        parent.transition(TaskStatus.BLOCKED)
+        return []
+
+    parent.add_log(
+        "Orchestrator",
+        f"Decomposed into {len(slices_plan)} slice(s); plan review passed.",
+    )
+    return run_decomposed_goal(
+        board, parent, intent, slices_plan, work_kind, brain, broker, context,
+        max_steps=max_steps, band=band,
+    )
 
 
 def settle_parent_against_ledger(parent: Task) -> None:
