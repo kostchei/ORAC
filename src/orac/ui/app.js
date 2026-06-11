@@ -26,6 +26,64 @@ function html(value) {
     .replaceAll("'", "&#039;");
 }
 
+function formatMoney(value) {
+  const number = Number(value || 0);
+  return `$${number.toFixed(2)}`;
+}
+
+function formatTime(value) {
+  if (!value) return "never";
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.valueOf())) return "unknown";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function relativeTime(value) {
+  if (!value) return "never";
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  const seconds = Math.max(0, Math.round((Date.now() - date.valueOf()) / 1000));
+  if (!Number.isFinite(seconds)) return "unknown";
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
+function latestLog(task) {
+  const log = task.work_log || [];
+  return log.length ? log[log.length - 1] : null;
+}
+
+function isActiveTask(task) {
+  return ["in_progress", "pending_approval", "clarifying", "review", "ready"].includes(task.status);
+}
+
+function currentFocusTask(tasks) {
+  const priority = ["in_progress", "pending_approval", "clarifying", "review", "ready", "blocked", "backlog"];
+  for (const status of priority) {
+    const task = tasks.find((candidate) => candidate.status === status);
+    if (task) return task;
+  }
+  return null;
+}
+
+function tickTouchedCount(lastTick) {
+  return Number(lastTick?.result?.touched_tasks ?? lastTick?.touched_tasks ?? 0);
+}
+
+function nextActionFor(task) {
+  if (task.status === "clarifying") return "Answer the latest intent question.";
+  if (task.status === "pending_approval") return "Review and approve or deny the parked action.";
+  if (task.status === "blocked") return "Inspect the blocker and unblock or revise the task.";
+  if (task.status === "ready") return "Next scrum tick can start the doer session.";
+  if (task.status === "in_progress") return "Agent work is underway.";
+  if (task.status === "review") return "Review the result.";
+  if (task.status === "backlog") return "Awaiting intent clarification.";
+  return "No action needed.";
+}
+
 function renderStats(stats) {
   const target = document.querySelector("#stats");
   target.innerHTML = Object.entries(stats)
@@ -36,22 +94,147 @@ function renderStats(stats) {
 function renderTasks(tasks) {
   const target = document.querySelector("#tasks");
   if (!tasks.length) {
-    target.innerHTML = `<p>No tasks yet.</p>`;
+    target.innerHTML = `<p class="empty-state">No tasks yet.</p>`;
     return;
   }
-  target.innerHTML = tasks
-    .map(
-      (task) => `
-        <article class="task">
-          <div class="task-title">
-            <strong>${html(task.title)}</strong>
-            <span class="status-${html(task.status)}">${html(task.status)}</span>
-          </div>
-          <div class="task-meta">${html(task.id)} - ${html(task.points)} point(s) - ${html(task.assignee)}</div>
-          <div class="task-meta">${html(task.description || "")}</div>
-        </article>`
-    )
-    .join("");
+  target.innerHTML = tasks.map(renderTaskCard).join("");
+}
+
+function renderTaskCard(task) {
+  const log = latestLog(task);
+  const kind = task.work_kind ? ` · ${task.work_kind}` : "";
+  const assignee = task.assignee || "unassigned";
+  const message = log ? `${log.agent}: ${log.message}` : nextActionFor(task);
+  return `
+    <article class="task">
+      <div class="task-title">
+        <strong>${html(task.title)}</strong>
+        <span class="status-${html(task.status)}">${html(task.status)}</span>
+      </div>
+      <div class="task-meta">${html(task.id)} · ${html(task.points)} point(s) · ${html(assignee)}${html(kind)}</div>
+      <div class="task-message">${html(message)}</div>
+      <div class="task-meta">Next: ${html(nextActionFor(task))}</div>
+    </article>`;
+}
+
+function renderRunStatus(state, loopStatus) {
+  const target = document.querySelector("#run-status");
+  const running = Boolean(loopStatus.running);
+  const current = currentFocusTask(state.tasks);
+  const decision = loopStatus.last_tick?.model_decision || state.model_policy;
+  const lastTick = loopStatus.last_tick;
+  const lastTouched = lastTick ? `${tickTouchedCount(lastTick)} task(s) touched` : "No tick yet";
+  const nextWake = running && lastTick?.at && state.settings?.daemon_interval_seconds
+    ? new Date((lastTick.at + Number(state.settings.daemon_interval_seconds)) * 1000)
+    : null;
+  const nextWakeText = nextWake ? formatTime(nextWake) : "n/a";
+  const stateClass = loopStatus.last_error ? "error" : running ? "running" : "stopped";
+  target.className = `run-status panel ${stateClass}`;
+  target.innerHTML = `
+    <div class="run-state">
+      <strong>${running ? "Running" : "Stopped"}</strong>
+      <span>${html(lastTouched)} · last tick ${html(relativeTime(lastTick?.at))}</span>
+    </div>
+    <div class="run-focus">
+      <strong>${html(current ? current.title : "No current task")}</strong><br />
+      ${html(current ? `${current.status} · ${nextActionFor(current)}` : "Add a request to give ORAC work.")}
+      ${loopStatus.last_error ? `<br /><span class="status-blocked">Error: ${html(loopStatus.last_error)}</span>` : ""}
+    </div>
+    <div class="run-meta">
+      Model: <strong>${html(decision.brain)}/${html(decision.model)}</strong><br />
+      Next wake: ${html(nextWakeText)}
+    </div>`;
+}
+
+function renderAttention(state, loopStatus) {
+  const items = [];
+  if (loopStatus.last_error) {
+    items.push({ type: "error", title: "Loop error", meta: "Runtime", message: loopStatus.last_error });
+  }
+  const review = state.review_queue || {};
+  if (Number(review.pending_approvals || 0) > 0) {
+    items.push({
+      type: "approval",
+      title: `${review.pending_approvals} approval(s) pending`,
+      meta: "Review queue",
+      message: "Approve, deny, or inspect parked actions before they can resume.",
+    });
+  }
+  if (Number(review.unacked_notifications || 0) > 0) {
+    items.push({
+      type: "approval",
+      title: `${review.unacked_notifications} action(s) awaiting review`,
+      meta: "Review queue",
+      message: "Acknowledge accepted actions or roll back anything the review rejects.",
+    });
+  }
+  for (const task of state.tasks) {
+    if (task.status === "clarifying") {
+      const log = latestLog(task);
+      items.push({ type: "clarifying", title: task.title, meta: `${task.id} · intent`, message: log?.message || nextActionFor(task) });
+    } else if (task.status === "pending_approval") {
+      items.push({ type: "approval", title: task.title, meta: `${task.id} · approval`, message: nextActionFor(task) });
+    } else if (task.status === "blocked") {
+      const log = latestLog(task);
+      items.push({ type: "blocked", title: task.title, meta: `${task.id} · blocked`, message: log?.message || task.description });
+    }
+  }
+  if (state.resources && state.resources.disk_free_gb !== null && Number(state.resources.disk_free_gb) < 10.0) {
+    items.push({
+      type: "blocked",
+      title: "Low disk space warning",
+      meta: "System resources",
+      message: `Only ${state.resources.disk_free_gb} GB of disk space remaining.`,
+    });
+  }
+
+  document.querySelector("#attention-count").textContent = String(items.length);
+  const target = document.querySelector("#attention-list");
+  if (!items.length) {
+    target.innerHTML = `<p class="empty-state">No clarifications, approvals, blockers, or loop errors need attention.</p>`;
+    return;
+  }
+  target.innerHTML = items.slice(0, 6).map((item) => `
+    <article class="attention-item ${html(item.type)}">
+      <div class="item-title"><strong>${html(item.title)}</strong><span>${html(item.type)}</span></div>
+      <div class="item-meta">${html(item.meta)}</div>
+      <div class="item-message">${html(item.message)}</div>
+    </article>`).join("");
+}
+
+function renderActiveWork(tasks) {
+  const target = document.querySelector("#active-work");
+  const active = tasks.filter(isActiveTask);
+  const visible = active.length ? active : tasks.filter((task) => task.status === "backlog").slice(0, 3);
+  if (!visible.length) {
+    target.innerHTML = `<p class="empty-state">No active work. Add a request or start the loop when work is available.</p>`;
+    return;
+  }
+  target.innerHTML = visible.map(renderTaskCard).join("");
+}
+
+function resourceSeverity(value, warning = 60, danger = 85) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  if (number >= danger) return "danger";
+  if (number >= warning) return "warning";
+  return "";
+}
+
+function renderResourceSummary(resources, policy) {
+  const cards = [
+    ["CPU", resources.cpu_percent === null ? "n/a" : `${resources.cpu_percent}%`, resourceSeverity(resources.cpu_percent, 60, 85)],
+    ["Memory", resources.memory_percent === null ? "n/a" : `${resources.memory_percent}%`, resourceSeverity(resources.memory_percent, 70, 85)],
+    ["GPU", resources.gpu_percent === null ? "n/a" : `${resources.gpu_percent}%`, resourceSeverity(resources.gpu_percent, 60, 85)],
+    ["VRAM", resources.vram_percent === null ? "n/a" : `${resources.vram_percent}%`, resourceSeverity(resources.vram_percent, 70, 85)],
+    ["Routing", `${policy.brain}/${policy.model}`, resources.busy ? "warning" : ""],
+    ["Budget left", formatMoney(policy.foundation_remaining_today_usd), Number(policy.foundation_remaining_today_usd) <= 0 ? "warning" : ""],
+  ];
+  document.querySelector("#resource-summary").innerHTML = cards.map(([label, value, severity]) => `
+    <div class="resource-card ${html(severity)}">
+      <span>${html(label)}</span>
+      <strong>${html(value)}</strong>
+    </div>`).join("");
 }
 
 function renderResources(resources) {
@@ -79,12 +262,51 @@ function renderModelPolicy(policy) {
     ["Brain", policy.brain],
     ["Model", policy.model],
     ["Reason", policy.reason],
-    ["Daily cap", `$${policy.daily_foundation_cap_usd}`],
-    ["Spent today", `$${policy.foundation_spent_today_usd}`],
-    ["Remaining", `$${policy.foundation_remaining_today_usd}`],
+    ["Daily cap", formatMoney(policy.daily_foundation_cap_usd)],
+    ["Spent today", formatMoney(policy.foundation_spent_today_usd)],
+    ["Remaining", formatMoney(policy.foundation_remaining_today_usd)],
   ]
     .map(([key, value]) => `<div class="resource-row"><span>${html(key)}</span><strong>${html(value)}</strong></div>`)
     .join("");
+}
+
+function renderDecisions(state, loopStatus) {
+  const decisions = [];
+  const decision = loopStatus.last_tick?.model_decision || state.model_policy;
+  decisions.push({
+    title: `Model policy selected ${decision.brain}/${decision.model}`,
+    meta: "Routing decision",
+    message: decision.reason,
+  });
+  const review = state.review_queue || {};
+  decisions.push({
+    title: review.is_clear ? "Review queue is clear" : "Review queue needs attention",
+    meta: `${review.pending_approvals || 0} approval(s), ${review.unacked_notifications || 0} unacked notification(s)`,
+    message: review.is_clear ? "No parked or unacknowledged actions are blocking the cockpit." : "Inspect the review queue before expecting parked work to resume.",
+  });
+  for (const event of state.interactions || []) {
+    const lower = String(event.message || "").toLowerCase();
+    const isDecision = ["intent", "system", "registry"].includes(String(event.agent || "").toLowerCase())
+      || lower.includes("selected")
+      || lower.includes("locked")
+      || lower.includes("blocked")
+      || lower.includes("approval")
+      || lower.includes("clarify")
+      || lower.includes("ready");
+    if (!isDecision) continue;
+    decisions.push({
+      title: `${event.agent} · ${event.task_title}`,
+      meta: event.created_at,
+      message: event.message,
+    });
+    if (decisions.length >= 6) break;
+  }
+  document.querySelector("#decisions").innerHTML = decisions.slice(0, 6).map((item) => `
+    <article class="decision">
+      <div class="decision-title"><strong>${html(item.title)}</strong></div>
+      <div class="decision-meta">${html(item.meta)}</div>
+      <div class="decision-message">${html(item.message)}</div>
+    </article>`).join("");
 }
 
 function renderAudio(audio) {
@@ -108,9 +330,8 @@ function renderSettings(settings) {
   document.querySelector("#setting-small-model").value = settings.lmstudio_small_model;
 }
 
-async function renderLoopStatus() {
-  const status = await api("/api/loop/status");
-  const last = status.last_tick ? `Last tick touched ${status.last_tick.result.touched_tasks} task(s).` : "No tick yet.";
+function renderLoopStatusText(status) {
+  const last = status.last_tick ? `Last tick touched ${tickTouchedCount(status.last_tick)} task(s).` : "No tick yet.";
   document.querySelector("#loop-status").textContent =
     `${status.running ? "Loop running." : "Loop stopped."} The wake interval controls how often agents check for work; it is not a keepalive. ${last} ${status.last_error || ""}`;
 }
@@ -118,7 +339,7 @@ async function renderLoopStatus() {
 function renderTimeline(events) {
   const target = document.querySelector("#timeline");
   if (!events.length) {
-    target.innerHTML = `<p>No interaction yet.</p>`;
+    target.innerHTML = `<p class="empty-state">No interaction yet.</p>`;
     return;
   }
   target.innerHTML = events
@@ -136,16 +357,21 @@ function renderTimeline(events) {
 }
 
 async function refresh() {
-  const state = await api("/api/state");
+  const [state, loopStatus] = await Promise.all([api("/api/state"), api("/api/loop/status")]);
   window.oracLoadedModels = state.loaded_models || [];
-  renderStats(state.stats);
-  renderTasks(state.tasks);
+  renderRunStatus(state, loopStatus);
+  renderAttention(state, loopStatus);
+  renderActiveWork(state.tasks);
+  renderResourceSummary(state.resources, state.model_policy);
   renderResources(state.resources);
   renderModelPolicy(state.model_policy);
+  renderDecisions(state, loopStatus);
+  renderStats(state.stats);
+  renderTasks(state.tasks);
   renderAudio(state.audio);
   renderSettings(state.settings);
   renderTimeline(state.interactions);
-  await renderLoopStatus();
+  renderLoopStatusText(loopStatus);
 }
 
 document.querySelector("#request-form").addEventListener("submit", async (event) => {
@@ -157,7 +383,14 @@ document.querySelector("#request-form").addEventListener("submit", async (event)
   });
   event.target.reset();
   document.querySelector("#request-points").value = 1;
+  document.querySelector("#add-request-drawer").open = false;
   await refresh();
+});
+
+document.querySelector("#show-add-request").addEventListener("click", () => {
+  const drawer = document.querySelector("#add-request-drawer");
+  drawer.open = true;
+  document.querySelector("#request-title").focus();
 });
 
 document.querySelector("#run-cycle").addEventListener("click", async () => {
@@ -230,12 +463,12 @@ document.querySelector("#save-settings").addEventListener("click", async () => {
 
 document.querySelector("#start-loop").addEventListener("click", async () => {
   await postJson("/api/loop/start", {});
-  await renderLoopStatus();
+  await refresh();
 });
 
 document.querySelector("#stop-loop").addEventListener("click", async () => {
   await postJson("/api/loop/stop", {});
-  await renderLoopStatus();
+  await refresh();
 });
 
 function readSettingsForm() {
@@ -264,6 +497,7 @@ async function transcribeRecording() {
       const detail = document.querySelector("#request-description");
       detail.value = detail.value ? `${detail.value}\n${lastTranscript}` : lastTranscript;
       document.querySelector("#speak-audio").disabled = false;
+      document.querySelector("#add-request-drawer").open = true;
     }
   } catch (error) {
     document.querySelector("#audio-transcript").textContent = error.message;

@@ -58,11 +58,14 @@ python -m orac.cli registry base-request "Build a feature" --desc "Rough user re
 python -m orac.cli ui --port 8765
 ```
 
-Open `http://127.0.0.1:8765`. The UI shows the task registry, local resources, current model routing decision, and a color-coded interaction log:
+Open `http://127.0.0.1:8765`. The UI is an operator cockpit focused on what ORAC is doing now:
 
-- User entries are blue.
-- Agent entries are purple.
-- Registry/system logs are green.
+- A run-status strip shows whether the loop is running, the last tick, the current focus task, and the active model route.
+- Needs Attention highlights clarifying questions, pending approvals, blocked tasks, and loop errors.
+- Active Work shows in-flight or ready tasks with their latest agent note and next expected action.
+- Resources & Routing summarizes CPU, memory, GPU/VRAM, local tier, and foundation budget before exposing full details.
+- Latest Scrum Decisions summarizes routing, review-queue, intent, and system decisions.
+- The Audit Log keeps the color-coded raw timeline: user entries are blue, agent entries are purple, and registry/system logs are green.
 
 If the machine exposes a microphone or speaker, the UI shows audio availability. After clicking `Enable Audio`, the browser asks for microphone permission. Recorded speech is posted to the ORAC backend for transcription with OpenAI Whisper when the optional audio dependencies are installed. The transcript is added to the base request detail field. `Speak` uses local text-to-speech through `pyttsx3` when available, with Windows SAPI as a fallback.
 

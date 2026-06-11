@@ -11,14 +11,53 @@
       <header class="topbar">
         <div>
           <h1>ORAC</h1>
-          <p>Local agent scrum registry</p>
+          <p>Local agent scrum cockpit</p>
         </div>
-        <button id="run-cycle" type="button">Run Cycle</button>
+        <div class="topbar-actions">
+          <button id="run-cycle" type="button">Run Cycle</button>
+          <button id="start-loop" type="button">Start Loop</button>
+          <button id="stop-loop" type="button">Stop Loop</button>
+        </div>
       </header>
 
-      <section class="grid">
-        <form id="request-form" class="panel request-panel">
-          <h2>Base Request</h2>
+      <section id="run-status" class="run-status panel" aria-live="polite"></section>
+
+      <section class="cockpit-grid">
+        <section class="panel attention-panel">
+          <div class="panel-head compact">
+            <h2>Needs Attention</h2>
+            <span id="attention-count" class="badge">0</span>
+          </div>
+          <div id="attention-list" class="stack-list"></div>
+        </section>
+
+        <section class="panel active-panel">
+          <div class="panel-head compact">
+            <h2>Active Work</h2>
+            <button id="show-add-request" class="secondary-button" type="button">+ Add Request</button>
+          </div>
+          <div id="active-work" class="tasks"></div>
+        </section>
+
+        <section class="panel resource-panel">
+          <h2>Resources & Routing</h2>
+          <div id="resource-summary" class="resource-summary"></div>
+          <details>
+            <summary>Full resource and model detail</summary>
+            <div id="resources" class="resources"></div>
+            <div id="model-policy" class="resources"></div>
+          </details>
+        </section>
+      </section>
+
+      <section class="panel decisions-panel">
+        <h2>Latest Scrum Decisions</h2>
+        <div id="decisions" class="decisions"></div>
+      </section>
+
+      <details id="add-request-drawer" class="panel drawer-panel">
+        <summary>Add a base request</summary>
+        <form id="request-form" class="request-panel">
           <label>
             Title
             <input id="request-title" required placeholder="What should ORAC work on?" />
@@ -33,43 +72,20 @@
           </label>
           <button type="submit">Add Request</button>
         </form>
+      </details>
 
-        <section class="panel">
-          <h2>Registry</h2>
-          <div id="stats" class="stats"></div>
-          <div id="tasks" class="tasks"></div>
-        </section>
+      <details class="panel drawer-panel">
+        <summary>Registry totals and backlog</summary>
+        <div id="stats" class="stats"></div>
+        <div id="tasks" class="tasks"></div>
+      </details>
 
-        <section class="panel">
-          <h2>Resources</h2>
-          <div id="resources" class="resources"></div>
-          <h2>Model Policy</h2>
-          <div id="model-policy" class="resources"></div>
-        </section>
-      </section>
-
-      <section class="panel audio-panel">
+      <details class="panel drawer-panel">
+        <summary>Settings</summary>
         <div class="panel-head">
-          <h2>Audio</h2>
-          <div class="audio-actions">
-            <button id="enable-audio" type="button">Enable Audio</button>
-            <button id="record-audio" type="button" disabled>Record</button>
-            <button id="stop-audio" type="button" disabled>Stop</button>
-            <button id="speak-audio" type="button" disabled>Speak</button>
-            <button id="install-audio" type="button">Install Audio Stack</button>
-          </div>
-        </div>
-        <div id="audio-status" class="audio-status"></div>
-        <div id="audio-transcript" class="audio-transcript"></div>
-      </section>
-
-      <section class="panel settings-panel">
-        <div class="panel-head">
-          <h2>Settings</h2>
+          <h2>Runtime Settings</h2>
           <div class="audio-actions">
             <button id="save-settings" type="button">Save Settings</button>
-            <button id="start-loop" type="button">Start Loop</button>
-            <button id="stop-loop" type="button">Stop Loop</button>
           </div>
         </div>
         <div id="loop-status" class="settings-status"></div>
@@ -103,10 +119,26 @@
             <input id="setting-small-model" placeholder="LM Studio model id" />
           </label>
         </form>
-      </section>
+      </details>
+
+      <details class="panel drawer-panel audio-panel">
+        <summary>Audio</summary>
+        <div class="panel-head">
+          <h2>Audio</h2>
+          <div class="audio-actions">
+            <button id="enable-audio" type="button">Enable Audio</button>
+            <button id="record-audio" type="button" disabled>Record</button>
+            <button id="stop-audio" type="button" disabled>Stop</button>
+            <button id="speak-audio" type="button" disabled>Speak</button>
+            <button id="install-audio" type="button">Install Audio Stack</button>
+          </div>
+        </div>
+        <div id="audio-status" class="audio-status"></div>
+        <div id="audio-transcript" class="audio-transcript"></div>
+      </details>
 
       <section class="panel timeline-panel">
-        <h2>Agent Interaction</h2>
+        <h2>Audit Log</h2>
         <div id="timeline" class="timeline"></div>
       </section>
     </main>
