@@ -83,7 +83,28 @@ CREATE TABLE IF NOT EXISTS standing_grants (
     revoked      INTEGER NOT NULL DEFAULT 0,
     revoked_at   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS subagents (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at     TEXT NOT NULL,
+    parent_task_id TEXT NOT NULL,
+    profile_slug   TEXT NOT NULL,
+    instruction    TEXT NOT NULL,
+    intent         TEXT NOT NULL,
+    resource_slice REAL NOT NULL DEFAULT 0,
+    status         TEXT NOT NULL DEFAULT 'active',
+    resolved_at    TEXT
+);
 """
+
+# The roster cap. This is both the deterministic admission limit AND the number
+# the Orchestrator's abundance frame is built on (design: "you have N/MAX slots
+# free" biases toward decomposition). The two must stay equal so the frame is
+# honest — never tell the model a budget the register will not honour.
+MAX_SUBAGENTS = 500
+
+# A spawned subagent that is still drawing (or holding) resources.
+_LIVE_SUBAGENT_STATUSES = ("proposed", "active")
 
 
 @dataclass(frozen=True)
@@ -110,6 +131,26 @@ class Notification:
     data: dict[str, Any]
     acked: bool
     acked_at: str | None
+
+
+@dataclass(frozen=True)
+class Subagent:
+    """One spawned subagent instance in the register (design: the ≤500 roster).
+
+    Distinct from a static agent *profile* (`agent_registry`): a profile is a
+    role definition; a Subagent is a live instance doing one decomposed slice of
+    work, with its own instruction, intent slice, and reserved resource share.
+    """
+
+    id: int
+    created_at: str
+    parent_task_id: str
+    profile_slug: str
+    instruction: str
+    intent: str
+    resource_slice: float
+    status: str
+    resolved_at: str | None
 
 
 @dataclass(frozen=True)
@@ -613,4 +654,94 @@ class BrokerStore:
             reason=row["reason"],
             revoked=bool(row["revoked"]),
             revoked_at=row["revoked_at"],
+        )
+
+    # --- subagent register (the ≤500 roster) -------------------------------
+
+    def subagent_roster_count(self) -> int:
+        """How many subagents are still live (proposed or active)."""
+        placeholders = ", ".join("?" for _ in _LIVE_SUBAGENT_STATUSES)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM subagents WHERE status IN ({placeholders})",
+                _LIVE_SUBAGENT_STATUSES,
+            ).fetchone()
+        return int(row[0])
+
+    def subagent_free_slots(self, cap: int = MAX_SUBAGENTS) -> int:
+        """Slots left on the roster — the honest number behind the frame."""
+        return max(0, cap - self.subagent_roster_count())
+
+    def active_slice_total(self) -> float:
+        """Sum of reserved resource slices across active subagents (band usage)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(resource_slice), 0) FROM subagents "
+                "WHERE status = 'active'"
+            ).fetchone()
+        return float(row[0])
+
+    def admit_subagent(
+        self,
+        parent_task_id: str,
+        profile_slug: str,
+        instruction: str,
+        intent: str,
+        resource_slice: float = 0.0,
+        cap: int = MAX_SUBAGENTS,
+    ) -> int:
+        """Admit a subagent to the roster, enforcing the cap. Raises if full.
+
+        Admission control is deterministic and fail-closed: a full roster is a
+        real limit, not something to silently grow past. Callers (Optimise's
+        allocator) check ``subagent_free_slots`` first; this is the hard floor.
+        """
+        if self.subagent_roster_count() >= cap:
+            raise RuntimeError(
+                f"Subagent roster is full ({cap}); cannot admit another. "
+                "Retire finished subagents or wait for slots to free."
+            )
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO subagents "
+                "(created_at, parent_task_id, profile_slug, instruction, intent, "
+                "resource_slice, status) VALUES (?, ?, ?, ?, ?, ?, 'active')",
+                (now_iso(), parent_task_id, profile_slug, instruction, intent, resource_slice),
+            )
+            return int(cursor.lastrowid)
+
+    def set_subagent_status(self, subagent_id: int, status: str) -> None:
+        if status not in {"proposed", "active", "done", "blocked", "retired"}:
+            raise ValueError(f"Invalid subagent status {status!r}.")
+        resolved = now_iso() if status in {"done", "blocked", "retired"} else None
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE subagents SET status = ?, resolved_at = ? WHERE id = ?",
+                (status, resolved, subagent_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"No subagent {subagent_id}.")
+
+    def list_subagents(self, status: str | None = None) -> list[Subagent]:
+        query = "SELECT * FROM subagents"
+        params: tuple[Any, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            params = (status,)
+        query += " ORDER BY id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._subagent_from_row(row) for row in rows]
+
+    def _subagent_from_row(self, row: sqlite3.Row) -> Subagent:
+        return Subagent(
+            id=row["id"],
+            created_at=row["created_at"],
+            parent_task_id=row["parent_task_id"],
+            profile_slug=row["profile_slug"],
+            instruction=row["instruction"],
+            intent=row["intent"],
+            resource_slice=float(row["resource_slice"]),
+            status=row["status"],
+            resolved_at=row["resolved_at"],
         )
