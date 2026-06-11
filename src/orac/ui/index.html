@@ -11,7 +11,7 @@
       <header class="topbar">
         <div>
           <h1>ORAC</h1>
-          <p>Local agent scrum cockpit</p>
+          <p>Local Agent Scrum &middot; The Operator&rsquo;s Desk</p>
         </div>
         <div class="topbar-actions">
           <button id="run-cycle" type="button">Run Cycle</button>
@@ -24,6 +24,7 @@
 
       <section class="cockpit-grid">
         <section class="panel attention-panel">
+          <span class="kicker">Triage</span>
           <div class="panel-head compact">
             <h2>Needs Attention</h2>
             <span id="attention-count" class="badge">0</span>
@@ -32,6 +33,7 @@
         </section>
 
         <section class="panel active-panel">
+          <span class="kicker">Dispatch</span>
           <div class="panel-head compact">
             <h2>Active Work</h2>
             <button id="show-add-request" class="secondary-button" type="button">+ Add Request</button>
@@ -40,6 +42,7 @@
         </section>
 
         <section class="panel resource-panel">
+          <span class="kicker">Instruments</span>
           <h2>Resources & Routing</h2>
           <div id="resource-summary" class="resource-summary"></div>
           <details>
@@ -51,6 +54,7 @@
       </section>
 
       <section class="panel decisions-panel">
+        <span class="kicker">The Council</span>
         <h2>Latest Scrum Decisions</h2>
         <div id="decisions" class="decisions"></div>
       </section>
@@ -138,6 +142,7 @@
       </details>
 
       <section class="panel timeline-panel">
+        <span class="kicker">On the Record</span>
         <h2>Audit Log</h2>
         <div id="timeline" class="timeline"></div>
       </section>

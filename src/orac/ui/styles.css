@@ -1,18 +1,42 @@
+/* ORAC — editorial / magazine theme.
+   Design language (the new default):
+   - 7-colour warm-paper palette with mustard as the unusual accent and dusty
+     rose as the second; no default 3-colour scheme.
+   - 1 serif (display/headlines) + 1 sans (body/UI). Never two sans.
+   - Magazine layout: asymmetric grid, hairline rules, kicker labels, generous
+     editorial spacing — not a SaaS card-and-shadow dashboard.
+   - No large radii anywhere: panels are square, controls use a small 3px. */
+
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap");
+
 :root {
-  color-scheme: dark;
-  --bg: #101214;
-  --panel: #171b20;
-  --panel-2: #1f252c;
-  --panel-3: #243447;
-  --border: #303944;
-  --text: #edf2f7;
-  --muted: #9aa7b4;
-  --user: #7dd3fc;
-  --agent: #c4b5fd;
-  --log: #a7f3d0;
-  --warn: #fbbf24;
-  --danger: #fb7185;
-  --ok: #86efac;
+  color-scheme: light;
+
+  /* The 7-colour palette. */
+  --paper: #f2ece0;   /* 1 — newsprint background          */
+  --ink: #1c1915;     /* 2 — warm near-black text/headlines */
+  --stone: #6d6457;   /* 3 — muted warm grey-brown          */
+  --rule: #ccc1ad;    /* 4 — hairline tan rules             */
+  --mustard: #bd8717; /* 5 — THE unusual accent             */
+  --rose: #a8586a;    /* 6 — dusty rose, second accent      */
+  --moss: #586a30;    /* 7 — deep editorial green           */
+
+  /* Derived surfaces (tints of the palette, not new hues). */
+  --card: color-mix(in srgb, var(--paper) 64%, #ffffff);
+  --card-2: color-mix(in srgb, var(--paper) 82%, #ffffff);
+  --rule-soft: color-mix(in srgb, var(--rule) 60%, var(--paper));
+
+  /* Semantic roles mapped onto the palette. */
+  --warn: var(--mustard);
+  --danger: var(--rose);
+  --ok: var(--moss);
+  --user: var(--rose);     /* audit log: user  */
+  --agent: var(--mustard); /* audit log: agent */
+  --log: var(--moss);      /* audit log: system/registry */
+
+  --radius: 3px;
+  --serif: "Fraunces", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
 * {
@@ -21,23 +45,62 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top left, #17202a 0, var(--bg) 36rem);
-  color: var(--text);
-  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 .shell {
-  width: min(1400px, calc(100vw - 32px));
+  width: min(1180px, calc(100vw - 56px));
   margin: 0 auto;
-  padding: 24px 0;
+  padding: 40px 0 64px;
 }
 
+/* --- masthead ----------------------------------------------------------- */
+
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 24px 32px;
+  padding-bottom: 14px;
+  border-bottom: 3px solid var(--ink);
+  margin-bottom: 4px;
+}
+
+/* the thin second rule of the classic double-rule masthead */
+.topbar::after {
+  content: "";
+  grid-column: 1 / -1;
+  height: 1px;
+  margin-top: 5px;
+  background: var(--rule);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: clamp(40px, 7vw, 72px);
+  line-height: 0.92;
+  letter-spacing: -0.02em;
+  font-optical-sizing: auto;
+}
+
+.topbar > div:first-child > p {
+  margin-top: 8px;
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--stone);
 }
 
 .topbar-actions,
@@ -47,80 +110,134 @@ body {
   gap: 8px;
 }
 
-h1,
-h2,
-p {
-  margin: 0;
-}
+/* --- type: kickers + headings ------------------------------------------- */
 
-h1 {
-  font-size: 28px;
+.kicker {
+  display: block;
+  margin-bottom: 7px;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--mustard);
 }
 
 h2 {
-  margin-bottom: 12px;
-  font-size: 16px;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 23px;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  margin-bottom: 14px;
 }
 
 p {
-  color: var(--muted);
+  color: var(--stone);
 }
 
+/* --- panels: rules, not cards ------------------------------------------- */
+
 .panel {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  padding: 16px;
-  box-shadow: 0 16px 40px rgb(0 0 0 / 0.12);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 20px 0 4px;
 }
 
 button,
 input,
-textarea {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-2);
-  color: var(--text);
+textarea,
+select {
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
   font: inherit;
 }
 
 input,
 textarea {
   width: 100%;
-  padding: 10px;
+  padding: 10px 11px;
+  border-color: var(--rule);
+  background: var(--card-2);
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--mustard);
+  outline-offset: 1px;
+  border-color: var(--mustard);
 }
 
 button {
   cursor: pointer;
-  padding: 10px 12px;
-  background: var(--panel-3);
+  padding: 9px 15px;
+  background: var(--paper);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: background 0.12s, color 0.12s;
 }
 
 button:hover,
 button:focus-visible {
-  border-color: #5b7088;
+  background: var(--ink);
+  color: var(--paper);
+  outline: none;
+}
+
+/* the primary masthead action wears the unusual accent */
+#run-cycle {
+  background: var(--mustard);
+  border-color: var(--mustard);
+  color: var(--ink);
+}
+
+#run-cycle:hover,
+#run-cycle:focus-visible {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
 }
 
 .secondary-button {
-  padding: 6px 10px;
-  color: var(--user);
+  padding: 5px 9px;
+  border-color: var(--rule);
+  background: transparent;
+  color: var(--rose);
 }
+
+.secondary-button:hover {
+  background: var(--rose);
+  border-color: var(--rose);
+  color: var(--paper);
+}
+
+/* --- run status banner -------------------------------------------------- */
 
 .run-status {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  border-left: 4px solid var(--warn);
+  gap: 24px;
+  margin: 18px 0 8px;
+  padding: 16px 18px;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-left: 4px solid var(--mustard);
+  background: var(--card);
 }
 
 .run-status.running {
-  border-left-color: var(--ok);
+  border-left-color: var(--moss);
 }
 
 .run-status.error {
-  border-left-color: var(--danger);
+  border-left-color: var(--rose);
 }
 
 .run-state {
@@ -129,55 +246,87 @@ button:focus-visible {
 }
 
 .run-state strong {
-  font-size: 18px;
-  letter-spacing: 0.02em;
+  font-family: var(--serif);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   text-transform: uppercase;
 }
 
 .run-state span,
 .run-focus,
 .run-meta {
-  color: var(--muted);
+  color: var(--stone);
+  font-size: 13px;
 }
 
 .run-focus strong {
-  color: var(--text);
+  color: var(--ink);
 }
 
 .run-meta {
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
+
+/* --- the asymmetric cockpit (feature column + sidebar) ------------------ */
 
 .cockpit-grid {
   display: grid;
-  grid-template-columns: 0.95fr 1.35fr 1fr;
-  gap: 16px;
+  grid-template-columns: 1.7fr 1fr;
+  grid-template-areas:
+    "active   attention"
+    "active   resources";
+  column-gap: 40px;
+  row-gap: 28px;
   align-items: start;
+  margin-top: 20px;
+}
+
+.active-panel {
+  grid-area: active;
+}
+
+.attention-panel {
+  grid-area: attention;
+}
+
+.resource-panel {
+  grid-area: resources;
+}
+
+/* sidebar panels carry a hairline column rule, magazine-style */
+.attention-panel,
+.resource-panel {
+  padding-left: 24px;
+  border-top: 1px solid var(--rule);
+  border-left: 1px solid var(--rule-soft);
 }
 
 .panel-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
-.panel-head.compact h2,
 .panel-head h2 {
   margin: 0;
 }
 
 .badge {
   display: inline-grid;
-  min-width: 28px;
-  height: 28px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--panel-2);
-  color: var(--warn);
-  font-weight: 700;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--mustard);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-weight: 600;
 }
 
 .stack-list,
@@ -186,15 +335,18 @@ button:focus-visible {
 .resources,
 .resource-summary {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .empty-state {
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  color: var(--muted);
-  padding: 12px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  color: var(--stone);
+  padding: 14px;
+  font-style: italic;
 }
+
+/* --- list items: hairline blocks with an accent edge -------------------- */
 
 .attention-item,
 .decision,
@@ -203,29 +355,29 @@ button:focus-visible {
 .resource-row,
 .resource-card,
 .event {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
 }
 
 .attention-item,
 .decision,
 .task,
 .resource-card {
-  padding: 11px 12px;
+  padding: 12px 14px;
 }
 
 .attention-item {
-  border-left: 4px solid var(--warn);
+  border-left: 4px solid var(--mustard);
 }
 
 .attention-item.blocked,
 .attention-item.error {
-  border-left-color: var(--danger);
+  border-left-color: var(--rose);
 }
 
 .attention-item.approval {
-  border-left-color: var(--user);
+  border-left-color: var(--moss);
 }
 
 .item-title,
@@ -234,6 +386,7 @@ button:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+  align-items: baseline;
 }
 
 .item-title strong,
@@ -241,205 +394,288 @@ button:focus-visible {
 .decision-title strong {
   min-width: 0;
   overflow-wrap: anywhere;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: -0.005em;
 }
 
 .item-meta,
 .task-meta,
 .decision-meta {
   margin-top: 6px;
-  color: var(--muted);
+  color: var(--stone);
   font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .item-message,
 .task-message,
 .decision-message {
-  margin-top: 8px;
+  margin-top: 9px;
   white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* status words: small-caps tags drawn from the palette */
+.status-done,
+.status-blocked,
+.status-pending_approval,
+.status-clarifying,
+.status-review,
+.status-ready,
+.status-in_progress {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .status-done {
-  color: var(--ok);
+  color: var(--moss);
 }
 
 .status-blocked,
 .status-pending_approval {
-  color: var(--danger);
+  color: var(--rose);
 }
 
 .status-clarifying,
 .status-review {
-  color: var(--warn);
+  color: var(--mustard);
 }
 
 .status-ready,
 .status-in_progress {
-  color: var(--user);
+  color: color-mix(in srgb, var(--rose) 72%, var(--ink));
 }
+
+/* --- resources ---------------------------------------------------------- */
 
 .resource-summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .resource-card {
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .resource-card span {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .resource-card strong {
-  font-size: 18px;
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .resource-card.warning strong {
-  color: var(--warn);
+  color: var(--mustard);
 }
 
 .resource-card.danger strong {
-  color: var(--danger);
+  color: var(--rose);
 }
 
 .resource-row {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 9px 10px;
+  padding: 9px 12px;
 }
 
 .resource-row span {
-  color: var(--muted);
+  color: var(--stone);
 }
+
+/* --- details drawers ---------------------------------------------------- */
 
 details > summary {
   cursor: pointer;
-  color: var(--text);
-  font-weight: 700;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  list-style: none;
+}
+
+details > summary::before {
+  content: "＋ ";
+  color: var(--mustard);
+}
+
+details[open] > summary::before {
+  content: "− ";
 }
 
 details[open] > summary {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .decisions-panel,
-.drawer-panel,
 .timeline-panel {
-  margin-top: 16px;
+  margin-top: 28px;
+}
+
+.drawer-panel {
+  margin-top: 18px;
+  padding-top: 16px;
 }
 
 .request-panel {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  max-width: 640px;
 }
 
 label {
   display: grid;
   gap: 6px;
-  color: var(--muted);
+  color: var(--stone);
+  font-size: 12px;
+  letter-spacing: 0.04em;
 }
 
 .stats {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .stat {
-  padding: 10px;
+  padding: 11px 12px;
 }
 
 .stat strong {
   display: block;
-  font-size: 20px;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 600;
 }
 
 .audio-status {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  gap: 10px;
 }
 
 .audio-transcript {
   min-height: 44px;
   margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-2);
-  color: var(--user);
-  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  padding: 12px;
   white-space: pre-wrap;
 }
 
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 
 .settings-status {
   margin-bottom: 12px;
-  color: var(--log);
+  color: var(--moss);
 }
+
+/* --- the audit log: a single editorial column --------------------------- */
 
 .timeline {
   display: grid;
-  gap: 10px;
-  max-height: 520px;
+  gap: 0;
+  max-height: 540px;
   overflow: auto;
-  padding-right: 4px;
 }
 
 .event {
-  padding: 10px 12px;
-  border-left-width: 4px;
+  border: 0;
+  border-top: 1px solid var(--rule-soft);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 14px 12px 16px;
+  border-left: 3px solid var(--rule);
+}
+
+.event:first-child {
+  border-top: 0;
 }
 
 .event-user {
-  border-left-color: var(--user);
+  border-left-color: var(--rose);
 }
 
 .event-agent {
-  border-left-color: var(--agent);
+  border-left-color: var(--mustard);
 }
 
 .event-log,
 .event-system {
-  border-left-color: var(--log);
+  border-left-color: var(--moss);
 }
 
 .event-head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--stone);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.event-head .speaker {
+  font-weight: 600;
 }
 
 .event-user .speaker {
-  color: var(--user);
+  color: var(--rose);
 }
 
 .event-agent .speaker {
-  color: var(--agent);
+  color: var(--mustard);
 }
 
 .event-log .speaker,
 .event-system .speaker {
-  color: var(--log);
+  color: var(--moss);
 }
 
 .event-message {
   margin-top: 6px;
   white-space: pre-wrap;
+  line-height: 1.5;
 }
 
-@media (max-width: 1100px) {
-  .cockpit-grid,
+/* --- responsive --------------------------------------------------------- */
+
+@media (max-width: 1000px) {
+  .cockpit-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "active"
+      "attention"
+      "resources";
+    column-gap: 0;
+  }
+
+  .attention-panel,
+  .resource-panel {
+    padding-left: 0;
+    border-left: 0;
+  }
+
   .run-status {
     grid-template-columns: 1fr;
   }
@@ -449,16 +685,21 @@ label {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 640px) {
   .shell {
-    width: min(100vw - 20px, 1400px);
-    padding: 12px 0;
+    width: min(100vw - 28px, 1180px);
+    padding: 24px 0 40px;
   }
 
-  .topbar,
+  .topbar {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
   .panel-head {
-    align-items: stretch;
     flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
 
   .resource-summary,

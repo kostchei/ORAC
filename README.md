@@ -58,14 +58,16 @@ python -m orac.cli registry base-request "Build a feature" --desc "Rough user re
 python -m orac.cli ui --port 8765
 ```
 
-Open `http://127.0.0.1:8765`. The UI is an operator cockpit focused on what ORAC is doing now:
+Open `http://127.0.0.1:8765`. The UI is an operator cockpit with an editorial, magazine-style layout (warm-paper palette, a mustard accent, serif headlines over a sans body) focused on what ORAC is doing now:
 
 - A run-status strip shows whether the loop is running, the last tick, the current focus task, and the active model route.
 - Needs Attention highlights clarifying questions, pending approvals, blocked tasks, and loop errors.
 - Active Work shows in-flight or ready tasks with their latest agent note and next expected action.
 - Resources & Routing summarizes CPU, memory, GPU/VRAM, local tier, and foundation budget before exposing full details.
 - Latest Scrum Decisions summarizes routing, review-queue, intent, and system decisions.
-- The Audit Log keeps the color-coded raw timeline: user entries are blue, agent entries are purple, and registry/system logs are green.
+- The Audit Log keeps the color-coded raw timeline: user entries are dusty rose, agent entries are mustard, and registry/system logs are moss green.
+
+The editorial look is the system's default visual language — codified in [docs/style-guide.md](docs/style-guide.md) so anything built with ORAC inherits the same palette, type pairing, and magazine layout.
 
 If the machine exposes a microphone or speaker, the UI shows audio availability. After clicking `Enable Audio`, the browser asks for microphone permission. Recorded speech is posted to the ORAC backend for transcription with OpenAI Whisper when the optional audio dependencies are installed. The transcript is added to the base request detail field. `Speak` uses local text-to-speech through `pyttsx3` when available, with Windows SAPI as a fallback.
 
