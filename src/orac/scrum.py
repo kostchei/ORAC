@@ -109,6 +109,15 @@ class Scrum:
         from orac.work import run_goal_task
 
         task.transition(TaskStatus.IN_PROGRESS)
+        # A UI goal declares the URL of its running app in metadata; threading it
+        # into context is what arms browser.verify_local_app for that goal (absent
+        # it, the frontend verifier is a no-op pass — see work.py). cdp_url is
+        # optional; the adapter defaults to the documented local endpoint.
+        context: dict[str, str] = {"repo_root": str(self.root)}
+        for key in ("app_url", "cdp_url"):
+            value = task.metadata.get(key)
+            if value:
+                context[key] = str(value)
         child = run_goal_task(
             board=board,
             parent=task,
@@ -117,7 +126,7 @@ class Scrum:
             work_kind=task.work_kind,
             brain=self._session_brain(task),
             broker=self.broker,
-            context={"repo_root": str(self.root)},
+            context=context,
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)

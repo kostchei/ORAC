@@ -187,3 +187,64 @@ def test_tool_is_known_granted_and_classified() -> None:
     assert "browser.verify_local_app" in broker.adapters
     # Read-only/local: dispatches immediately, never parks for approval.
     assert approval_mode_for("browser.verify_local_app") is ApprovalMode.AUTO
+
+
+def test_loop_threads_app_url_from_goal_metadata(tmp_path, monkeypatch) -> None:
+    # A goal that declares an app_url in metadata must have it forwarded into the
+    # doer's context, which is what arms the frontend verifier for that goal.
+    import orac.work as work_mod
+    from orac.models import Board
+    from orac.scrum import Scrum
+
+    (tmp_path / ".orac").mkdir()
+    captured: dict[str, str] = {}
+
+    def fake_run_goal_task(**kwargs) -> Task:
+        captured.update(kwargs["context"])
+        return Task(title="child", status=TaskStatus.DONE)
+
+    monkeypatch.setattr(work_mod, "run_goal_task", fake_run_goal_task)
+
+    scrum = Scrum(brain=None, root=tmp_path)
+    goal = Task(
+        title="restyle the cockpit",
+        status=TaskStatus.READY,
+        work_kind="code",
+        metadata={"goal": "restyle the cockpit", "app_url": "http://127.0.0.1:8765"},
+    )
+    board = Board()
+    board.add_task(goal)
+
+    assert scrum._build_if_goal_task(board, goal) is True
+    assert captured["app_url"] == "http://127.0.0.1:8765"
+    assert captured["repo_root"] == str(tmp_path)
+
+
+def test_loop_omits_app_url_for_backend_goal(tmp_path, monkeypatch) -> None:
+    # A goal with no app_url leaves context without one, so the UI verifier is a
+    # no-op pass — the backend path is unchanged.
+    import orac.work as work_mod
+    from orac.models import Board
+    from orac.scrum import Scrum
+
+    (tmp_path / ".orac").mkdir()
+    captured: dict[str, str] = {}
+
+    def fake_run_goal_task(**kwargs) -> Task:
+        captured.update(kwargs["context"])
+        return Task(title="child", status=TaskStatus.DONE)
+
+    monkeypatch.setattr(work_mod, "run_goal_task", fake_run_goal_task)
+
+    scrum = Scrum(brain=None, root=tmp_path)
+    goal = Task(
+        title="speed up the broker",
+        status=TaskStatus.READY,
+        work_kind="code",
+        metadata={"goal": "speed up the broker"},
+    )
+    board = Board()
+    board.add_task(goal)
+
+    assert scrum._build_if_goal_task(board, goal) is True
+    assert "app_url" not in captured
