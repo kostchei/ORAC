@@ -324,12 +324,22 @@ def find_chrome() -> str | None:
 def launch_chrome(chrome_path: str, cdp_port: int, profile_dir: Path) -> None:
     """Launch Chrome/Edge with the CDP debug port and a dedicated ORAC profile.
 
-    The process is detached so it outlives the ORAC daemon.
+    The process is detached so it outlives the ORAC daemon. The profile path is
+    resolved to absolute first: a detached Chrome resolves a relative
+    ``--user-data-dir`` against its own working directory, not ORAC's, so a
+    relative path silently lands on the wrong (often the default) profile —
+    Chrome then hands off to any already-running instance and exits without ever
+    binding the debug port. Absolute is the only correct form here.
     """
     args = [
         chrome_path,
         f"--remote-debugging-port={cdp_port}",
-        f"--user-data-dir={profile_dir}",
+        f"--user-data-dir={Path(profile_dir).resolve()}",
+        # Pin the single ORAC profile so Chrome opens straight into it and never
+        # shows the "Who's using Chrome?" picker — belt-and-suspenders with the
+        # absolute user-data-dir above (a picker means Chrome reached the user's
+        # real profiles, which must never happen here).
+        "--profile-directory=Default",
         "--no-first-run",
         "--no-default-browser-check",
     ]

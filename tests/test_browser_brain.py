@@ -233,6 +233,31 @@ def test_extract_new_text_no_new_content() -> None:
     assert result == "same"
 
 
+def test_launch_chrome_passes_absolute_user_data_dir(monkeypatch) -> None:
+    # Regression: a detached Chrome resolves a relative --user-data-dir against
+    # its own cwd, not ORAC's, so a relative profile lands on the wrong (often
+    # default) profile, hands off to a running Chrome, and never binds the debug
+    # port. launch_chrome must always emit an absolute path.
+    from pathlib import Path
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_popen(args, **_kwargs):
+        captured["args"] = args
+        return MagicMock()
+
+    monkeypatch.setattr(bb.subprocess, "Popen", fake_popen)
+    bb.launch_chrome("chrome", 9222, Path(".orac/chrome-profile"))
+
+    udd = next(a for a in captured["args"] if a.startswith("--user-data-dir="))
+    path = udd.split("=", 1)[1]
+    assert Path(path).is_absolute(), f"expected absolute user-data-dir, got {path!r}"
+    assert path.endswith("chrome-profile")
+    # The profile is pinned so Chrome never shows the "Who's using Chrome?" picker
+    # (a picker means it reached the user's real profiles).
+    assert "--profile-directory=Default" in captured["args"]
+
+
 # ---------------------------------------------------------------------------
 # llm.build_brain integration
 # ---------------------------------------------------------------------------
