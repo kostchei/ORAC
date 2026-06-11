@@ -6,6 +6,17 @@ from typing import Any
 from orac.agent_registry import load_agent_profiles
 from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
+from orac.intent_ledger import (
+    SLICE_BLOCKED,
+    SLICE_SATISFIED,
+    attach_child,
+    coverage_report,
+    is_blocked,
+    is_covered,
+    open_ledger,
+    mark,
+    slices,
+)
 from orac.llm import Brain
 from orac.models import (
     Board,
@@ -97,6 +108,12 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
 }
 
 
+# A subagent's default share of the 60% resource band. 0.25 => up to four run
+# concurrently before the band is full. Optimise's allocator may pass a tuned
+# slice; this is the standing default.
+DEFAULT_RESOURCE_SLICE = 0.25
+
+
 def run_goal_task(
     board: Board,
     parent: Task,
@@ -107,11 +124,17 @@ def run_goal_task(
     broker: ToolBroker,
     context: dict[str, Any],
     max_steps: int = 16,
+    intent: str | None = None,
+    resource_slice: float = DEFAULT_RESOURCE_SLICE,
 ) -> Task:
     """Spawn the kind's doer against a goal; the model decides how.
 
     The child inherits no parent history — only the contract. Summary-up on
-    completion; a kind with no registered doer blocks visibly.
+    completion; a kind with no registered doer blocks visibly. When the broker
+    has a store, the spawned doer is admitted to the subagent register (the
+    roster) and its final state is written back, so the live free-count stays
+    truthful. ``intent`` records what slice of the parent intent this child
+    carries (defaults to the goal).
     """
     try:
         spec = WORK_KINDS[work_kind]
@@ -164,6 +187,23 @@ def run_goal_task(
         rules=spec.contract_rules.format(task_id=child.id),
         done_means=spec.done_means,
     )
+
+    # Admit the doer to the roster (the register), reserving its resource slice.
+    # Recorded so the live free-count behind the Orchestrator's frame is honest.
+    subagent_id: int | None = None
+    if broker.store is not None:
+        subagent_id = broker.store.admit_subagent(
+            parent_task_id=parent.id,
+            profile_slug=spec.doer_slug,
+            instruction=contract,
+            intent=intent or goal,
+            resource_slice=resource_slice,
+        )
+
+    def _retire(status: str) -> None:
+        if broker.store is not None and subagent_id is not None:
+            broker.store.set_subagent_status(subagent_id, status)
+
     session = AgentSession(profile=doer, brain=brain, broker=broker, max_steps=max_steps)
     result = session.run(child, contract)
 
@@ -176,6 +216,7 @@ def run_goal_task(
         ok, detail = verify_goal_done(spec, child, broker, context)
         if ok:
             child.transition(TaskStatus.DONE)
+            _retire("done")
             parent.add_log(
                 "Orchestrator",
                 f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
@@ -185,6 +226,7 @@ def run_goal_task(
                 doer.name, f"Claimed done, but verification failed: {detail}"
             )
             child.transition(TaskStatus.BLOCKED)
+            _retire("blocked")
             parent.transition(TaskStatus.BLOCKED)
             parent.add_log(
                 "Orchestrator",
@@ -192,6 +234,7 @@ def run_goal_task(
                 f"verification failed: {detail}",
             )
     elif result.status == "pending":
+        # Parked for approval: still live (holds its roster slot) until resolved.
         child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
         parent.add_log(
             "Orchestrator",
@@ -199,9 +242,83 @@ def run_goal_task(
         )
     else:
         child.transition(TaskStatus.BLOCKED)
+        _retire("blocked")
         parent.transition(TaskStatus.BLOCKED)
         parent.add_log("Orchestrator", f"{spec.kind} subtask {child.id} blocked: {result.summary}")
     return child
+
+
+def run_decomposed_goal(
+    board: Board,
+    parent: Task,
+    intent: str,
+    decomposition: list[dict[str, Any]],
+    work_kind: str,
+    brain: Brain,
+    broker: ToolBroker,
+    context: dict[str, Any],
+    max_steps: int = 16,
+) -> list[Task]:
+    """Fan a parent intent out across one child per declared slice, tracking the
+    intent ledger so the parent cannot be called done until every slice is.
+
+    ``decomposition`` is the Orchestrator's plan: a list of
+    ``{sub_intent, goal, acceptance_criteria}``. Each slice carries its piece of
+    ``intent`` faithfully into its child contract (instruction-down); the ledger
+    is the deterministic guarantee that no slice is dropped and that the parent's
+    status reflects true coverage — the floor under "remind the Orchestrator his
+    job is not finished".
+    """
+    open_ledger(parent, intent, decomposition)
+    children: list[Task] = []
+    for index, slice_ in enumerate(slices(parent)):
+        child = run_goal_task(
+            board=board,
+            parent=parent,
+            goal=slice_["goal"],
+            acceptance_criteria=tuple(slice_["acceptance_criteria"]),
+            work_kind=work_kind,
+            brain=brain,
+            broker=broker,
+            context=context,
+            max_steps=max_steps,
+            intent=slice_["sub_intent"],
+        )
+        attach_child(parent, index, child.id)
+        if child.status is TaskStatus.DONE:
+            mark(parent, child.id, SLICE_SATISFIED)
+        elif child.status is TaskStatus.PENDING_APPROVAL:
+            pass  # slice stays open; it resolves when the approval does
+        else:
+            mark(parent, child.id, SLICE_BLOCKED)
+        children.append(child)
+
+    settle_parent_against_ledger(parent)
+    return children
+
+
+def settle_parent_against_ledger(parent: Task) -> None:
+    """Set the parent's status from its intent ledger (the authoritative gate).
+
+    Covered -> DONE. Any slice blocked -> BLOCKED (the intent cannot be fully met
+    as decomposed). Otherwise slices remain open -> the parent stays IN_PROGRESS
+    and Intent logs the reminder of what is still owed. Re-callable after a parked
+    slice resolves, so the parent closes only when the whole intent is satisfied.
+    """
+    report = coverage_report(parent)
+    if is_covered(parent):
+        parent.transition(TaskStatus.DONE)
+        parent.add_log("Intent", f"Parent done — {report}")
+    elif is_blocked(parent):
+        parent.transition(TaskStatus.BLOCKED)
+        parent.add_log("Intent", f"Parent blocked — {report}")
+    else:
+        if parent.status is not TaskStatus.IN_PROGRESS:
+            parent.transition(TaskStatus.IN_PROGRESS)
+        parent.add_log(
+            "Intent",
+            f"Orchestrator not finished — {report}",
+        )
 
 
 # Verifier name -> how it confirms a kind's done-means. The check runs through
