@@ -127,6 +127,42 @@ category starts until item 4 has produced real evidence.
 
 ---
 
+## Decomposition fan-out — many subagents under one goal
+
+The Orchestrator can break a goal into a fan-out of subagents, each owning a slice of the
+intent, with resource governance and an intent-coverage guarantee. Built and tested as a
+library; **not yet wired into the daemon loop** (the loop still runs one doer per goal via
+`scrum._build_if_goal_task` → `run_goal_task`; switching it to `run_orchestrated_goal` is the
+remaining integration step).
+
+- **(a) Subagent register (the ≤500 roster).** `broker_store.subagents` + `MAX_SUBAGENTS=500`.
+  `admit_subagent` is fail-closed admission control; `subagent_free_slots` / `active_slice_total`
+  expose the live numbers. Distinct from static agent profiles: these are live instances.
+- **(b) Intent ledger + parent-stays-open.** `intent_ledger.py` tracks each declared slice
+  (sub-intent → child → status) on the parent metadata; `settle_parent_against_ledger` is the
+  authoritative gate — covered ⇒ DONE, any slice blocked ⇒ BLOCKED, else the parent stays open
+  and Intent logs "Orchestrator not finished". The deterministic floor guarantees no declared
+  slice is dropped; semantic coverage is (d)'s judgment. `run_decomposed_goal` runs one child
+  per slice; every spawned doer is admitted to the register.
+- **(c) The honest abundance frame.** `orchestrator.propose_decomposition` tells the model the
+  *live* free-slot count ("you have N of MAX free") to bias toward decomposition. The number is
+  read from the register (never hardcoded) and equals the enforced cap, so it self-tightens as
+  the roster fills; a plan exceeding its honest budget is refused.
+- **(d) The counterweight.** `plan_review.review_decomposition` — Intent/Simple/Efficiency judge
+  the *plan* before any spawn (coverage / over-fragmentation / waste), aggregated like the
+  council. This is the brake on the sprawl the frame encourages.
+- **(e) Both-agree DISPATCH gate.** `dispatch.both_agree` — a spawn fires only if the Orchestrator
+  proposed it (approved plan) *and* Optimise admits it (free slot + room in the resource band,
+  the 60%-utilisation idea made concrete). A refused spawn defers the slice. `run_orchestrated_goal`
+  ties (c)→(d)→(e)→(b) into one entry.
+
+**Next for this subsystem:** wire `run_orchestrated_goal` into the loop behind a goal-size
+heuristic (small goals stay single-doer); promote the RETURN edge to a full council review
+(today the per-slice return is the deterministic `verify_goal_done` floor); let subagents
+recurse (the register cap is already global, so depth is naturally bounded).
+
+---
+
 ## Milestone B — Mature the governance, then widen the surface (POST-BOOTSTRAP)
 
 - [x] **P5 — LLM lenses (risk-gated).** Lenses escalate to the model only on consequential edges
