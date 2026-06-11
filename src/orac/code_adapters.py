@@ -39,9 +39,16 @@ class CodeAdapterSet:
 
     Every path argument is resolved and checked to fall inside an approved root;
     anything outside raises (no fallback, no silent clamp).
+
+    ``base_branch`` is the trunk every build branches from. Each build stays on
+    its own ``build/{task_id}`` branch for human review (review-after), but the
+    *next* build must fork from the trunk, not from wherever HEAD was left — else
+    builds stack on each other's unreviewed work. Forking from an explicit base
+    makes each build independent of the checked-out branch.
     """
 
     approved_roots: tuple[Path, ...]
+    base_branch: str = "main"
 
     def adapters(self) -> dict[str, Adapter]:
         return {
@@ -196,11 +203,24 @@ class CodeAdapterSet:
     def create_branch(self, req: CapabilityRequest) -> ToolResult:
         root = self._root_for(req.args.get("root"))
         name = req.args["name"]
-        self._git(root, "checkout", "-b", name)
+        # Fork from the trunk, not from current HEAD: a previous build may have
+        # left HEAD on its own (unreviewed) build branch, and branching off that
+        # would silently carry its changes into this build. An explicit base
+        # keeps every build independent and reviewable on its own branch.
+        base = str(req.args.get("base") or self.base_branch)
+        verify = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+            cwd=root, capture_output=True, text=True,
+        )
+        if verify.returncode != 0:
+            raise ValueError(
+                f"Cannot branch {name!r}: base ref {base!r} does not exist in {root}."
+            )
+        self._git(root, "checkout", "-b", name, base)
         return ToolResult(
             "git.create_branch",
-            f"Created and checked out branch {name!r}.",
-            {"root": str(root), "branch": name},
+            f"Created and checked out branch {name!r} from {base!r}.",
+            {"root": str(root), "branch": name, "base": base},
         )
 
     def commit(self, req: CapabilityRequest) -> ToolResult:
@@ -330,6 +350,8 @@ class CodeAdapterSet:
         )
 
 
-def code_adapters_for(roots: tuple[Path | str, ...]) -> dict[str, Adapter]:
+def code_adapters_for(
+    roots: tuple[Path | str, ...], base_branch: str = "main"
+) -> dict[str, Adapter]:
     resolved = tuple(Path(r).resolve() for r in roots)
-    return CodeAdapterSet(resolved).adapters()
+    return CodeAdapterSet(resolved, base_branch=base_branch).adapters()

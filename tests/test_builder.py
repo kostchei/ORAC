@@ -94,6 +94,51 @@ def test_builder_branch_write_commit_loop(tmp_path) -> None:
     assert build("git.status").data["changes"] == []
 
 
+def test_builds_fork_from_trunk_not_from_previous_build(tmp_path) -> None:
+    # The daemon leaves HEAD on a build branch for human review. The NEXT build
+    # must still fork from the trunk, not from that unreviewed branch — otherwise
+    # builds stack on each other's un-OK'd work.
+    _init_repo(tmp_path)
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+    task = Task(title="x")
+
+    def build(tool: str, **args):
+        return broker.request(
+            CapabilityRequest(agent="Builder", tool=tool, task_id=task.id, args=args), task
+        )
+
+    # First build: branch, write, commit on build/a — HEAD is left here.
+    assert build("git.create_branch", name="build/a").status is CapabilityStatus.ALLOWED
+    build("repo.write_file", path=str(tmp_path / "a.py"), content="A = 1\n")
+    build("git.commit", message="a", paths=[str(tmp_path / "a.py")])
+
+    # Second build, with HEAD still on build/a: must fork from main.
+    res = build("git.create_branch", name="build/b")
+    assert res.status is CapabilityStatus.ALLOWED
+    assert res.data["base"] == "main"
+    # build/a's file is absent on build/b, and build/a is not in its history.
+    assert not (tmp_path / "a.py").exists()
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "build/a", "build/b"],
+        cwd=tmp_path, capture_output=True,
+    )
+    assert ancestry.returncode != 0, "build/b must not descend from build/a"
+
+
+def test_create_branch_rejects_missing_base(tmp_path) -> None:
+    _init_repo(tmp_path)
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+    task = Task(title="x")
+    with pytest.raises(ValueError, match="does not exist"):
+        broker.request(
+            CapabilityRequest(
+                agent="Builder", tool="git.create_branch", task_id=task.id,
+                args={"name": "build/x", "base": "no-such-branch"},
+            ),
+            task,
+        )
+
+
 def test_builder_runs_tests(tmp_path) -> None:
     _init_repo(tmp_path)
     broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
