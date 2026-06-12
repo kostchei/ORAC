@@ -46,10 +46,19 @@ before ORAC widens beyond the code-writing bootstrap.
 
 - [x] **Harden board state (minimum bar).** All JSON state writes
   (`board.json`, `config.json`, `usage.json`) now go through
-  write-temp-then-rename (`BoardStore._save_atomic`): a daemon death mid-write
-  leaves the previous file intact, failed saves clean up their temp file, and a
-  corrupt board fails closed by raising rather than loading defaults. Covered
-  by `tests/test_storage.py`.
+  write-temp-fsync-then-rename (`BoardStore._save_atomic`): a daemon death or
+  power loss mid-write leaves the previous file intact, and failed saves clean
+  up their temp file. A corrupt board fails closed (`CorruptStateError`) and
+  `orac board recover` restores the `board.last-good.json` backup refreshed on
+  every save. Concurrent writers are guarded by an OS file lock plus a board
+  `revision` check: a save based on a stale revision raises `StaleBoardError`
+  instead of silently destroying the other writer's updates (the daemon tick
+  vs. UI server window). Covered by `tests/test_storage.py`.
+
+- [ ] **Resolve write conflicts, don't just detect them.** `StaleBoardError`
+  turns the daemon-tick vs. UI-server lost-update race from silent data loss
+  into a loud failure, but the losing writer still has no way to merge its
+  changes. Proper resolution is the event log's job (below).
 
 - [ ] **Board event log.** The preferred end-state remains an append-only
   event log that can rebuild the board and unify with the audit trail; the

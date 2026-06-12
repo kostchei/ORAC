@@ -153,6 +153,10 @@ class Board:
     tasks: list[Task] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
+    # Monotonic save counter. BoardStore.save refuses to overwrite a revision
+    # it did not load (StaleBoardError), so concurrent writers cannot silently
+    # destroy each other's updates.
+    revision: int = 0
 
     def add_task(self, task: Task) -> None:
         self.tasks.append(task)
@@ -170,6 +174,7 @@ class Board:
         return {
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "revision": self.revision,
             "tasks": [task.to_dict() for task in self.tasks],
         }
 
@@ -179,6 +184,7 @@ class Board:
             tasks=[Task.from_dict(item) for item in data.get("tasks", [])],
             created_at=str(data.get("created_at") or now_iso()),
             updated_at=str(data.get("updated_at") or now_iso()),
+            revision=int(data.get("revision", 0)),
         )
 
 

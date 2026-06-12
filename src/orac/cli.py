@@ -62,6 +62,12 @@ def make_parser() -> argparse.ArgumentParser:
     add.add_argument("--desc", default="", help="Task description.")
     add.add_argument("--points", type=int, default=1, help="Estimated effort points.")
 
+    board = subparsers.add_parser("board", help="Board state operations.")
+    board_sub = board.add_subparsers(dest="board_command", required=True)
+    board_sub.add_parser(
+        "recover", help="Restore board.json from the last-good backup."
+    )
+
     list_cmd = subparsers.add_parser("list", help="List tasks.")
     list_cmd.add_argument("--status", choices=[status.value for status in TaskStatus])
     list_cmd.add_argument("--logs", action="store_true", help="Show task work logs.")
@@ -279,6 +285,15 @@ def cmd_list(store: BoardStore, args: argparse.Namespace) -> int:
             print("  Work log:")
             for entry in task.work_log:
                 print(f"  - {entry.created_at} {entry.agent}: {entry.message}")
+    return 0
+
+
+def cmd_board_recover(store: BoardStore) -> int:
+    board = store.recover()
+    print(
+        f"Restored {store.board_path} from {store.backup_path} "
+        f"({len(board.tasks)} task(s), revision {board.revision})."
+    )
     return 0
 
 
@@ -756,6 +771,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_add(store, args)
     if args.command == "list":
         return cmd_list(store, args)
+    if args.command == "board" and args.board_command == "recover":
+        return cmd_board_recover(store)
     if args.command == "registry" and args.registry_command == "stats":
         return cmd_registry_stats(store)
     if args.command == "registry" and args.registry_command == "base-request":
