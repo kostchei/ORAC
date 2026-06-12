@@ -115,6 +115,24 @@ def test_think_json_appends_schema_instructions(monkeypatch) -> None:
     assert "no markdown" in typed.lower()
 
 
+def test_prompt_does_not_disclose_agent_identity(monkeypatch) -> None:
+    # Providers must not be told the request is from an automated agent: no
+    # ORAC/agent/role/task header that could change rate-weighting or treatment.
+    task = Task(title="secret-task-title", status=TaskStatus.IN_PROGRESS)
+    captured: list[str] = []
+    page = _make_page(response_el_text="OK", provider="claude")
+    page.keyboard.type.side_effect = lambda text, delay=0: captured.append(text)
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    brain.think("builder", "doer", task, "summarise this")
+
+    typed = captured[0]
+    assert typed == "summarise this"
+    for tell in ("ORAC", "agent=", "Role:", "secret-task-title"):
+        assert tell not in typed, f"prompt leaked agent identity: {tell!r}"
+
+
 def test_provider_url_dispatched_correctly(monkeypatch) -> None:
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
     for provider, expected_url in [
@@ -231,6 +249,42 @@ def test_extract_new_text_short_before() -> None:
 def test_extract_new_text_no_new_content() -> None:
     result = _extract_new_text("same", "same")
     assert result == "same"
+
+
+def test_logged_out_provider_raises_login_required(monkeypatch) -> None:
+    # No chat input ever appears (login wall) -> an explicit, actionable signal,
+    # not an opaque timeout the loop would retry forever.
+    page = _make_page(provider="claude")
+    page.wait_for_selector.side_effect = TimeoutError("no input box")
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+
+    with pytest.raises(bb.BrowserLoginRequired) as excinfo:
+        brain.think("builder", "doer", task, "hi")
+
+    assert excinfo.value.provider == "claude"
+    assert "login" in str(excinfo.value).lower()
+    # The login tab was brought to the front (popped) for the operator.
+    page._session.call.assert_any_call("Page.bringToFront")
+
+
+def test_provider_login_ready_reflects_input_presence(monkeypatch) -> None:
+    page = MagicMock()
+    page._session.evaluate.return_value = True
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    assert bb.provider_login_ready("openai", "http://localhost:9222", settle=0) is True
+
+    page._session.evaluate.return_value = False
+    assert bb.provider_login_ready("claude", "http://localhost:9222", settle=0) is False
+
+
+def test_pop_provider_login_returns_true_when_already_in(monkeypatch) -> None:
+    page = MagicMock()
+    page._session.evaluate.return_value = True  # input present => logged in
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    assert bb.pop_provider_login("gemini", "http://localhost:9222", settle=0) is True
 
 
 def test_launch_chrome_passes_absolute_user_data_dir(monkeypatch) -> None:

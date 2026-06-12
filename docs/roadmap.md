@@ -197,6 +197,10 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 
 ## Open decisions / dependencies
 
+See also [../TODO.md](../TODO.md) for the current appraisal backlog covering
+verification, rollback, budget accounting, audio isolation, state durability, and
+the council contract.
+
 | Decision | Blocks | Notes |
 | --- | --- | --- |
 | Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | **Settled:** local subprocess git/pytest. Write = `repo.write_file` (whole file) + `repo.edit_file` (surgical, fail-closed); `repo.apply_patch` satisfied in spirit |

@@ -13,6 +13,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from orac.browser_primitive import BrowserPrimitiveError
 from orac.models import Task
 
 # Windows chrome/edge candidates (checked in order when PATH lookup fails).
@@ -31,6 +32,24 @@ _CHROME_WIN_CANDIDATES: list[str] = [
 
 # Provider configuration -------------------------------------------------------
 # Selectors verified against live DOM 2026-06-10.
+
+class BrowserLoginRequired(RuntimeError):
+    """A browser foundation provider has no logged-in session.
+
+    Raised instead of a generic timeout when the provider's chat input never
+    appears because the page is sitting on a login wall. Carries the provider and
+    the URL now open in the ORAC browser, so the operator can sign in there and
+    retry — a human-action signal, not a retryable model failure.
+    """
+
+    def __init__(self, provider: str, url: str) -> None:
+        self.provider = provider
+        self.url = url
+        super().__init__(
+            f"{provider} is not logged in. Its login page is open in the ORAC "
+            f"browser ({url}); sign in there, then retry."
+        )
+
 
 _PROVIDER_URLS: dict[str, str] = {
     "claude": "https://claude.ai/new",
@@ -158,11 +177,14 @@ class BrowserFoundationBrain:
     # Internal helpers ---------------------------------------------------------
 
     def _build_prompt(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
-        return (
-            f"[ORAC · agent={agent_name} · task={task.title!r}]\n"
-            f"Role: {role}\n\n"
-            f"{prompt}"
-        )
+        # Send the prompt as an ordinary human message. We deliberately do NOT
+        # prepend any "[ORAC · agent=… · task=…] / Role:" header: announcing to a
+        # provider's web UI that the request comes from an automated agent could
+        # change how it is rate-weighted or how the model treats the prompt. The
+        # substantive instruction already lives in `prompt`; the identity metadata
+        # is for ORAC's own logs, not the provider.
+        del agent_name, role, task  # intentionally not surfaced to the provider
+        return prompt
 
     def _send_and_receive(self, text: str) -> str:
         try:
@@ -173,7 +195,7 @@ class BrowserFoundationBrain:
                 finally:
                     page.close()
         except Exception as exc:
-            if isinstance(exc, (TimeoutError, ValueError)):
+            if isinstance(exc, (TimeoutError, ValueError, BrowserLoginRequired)):
                 raise
             raise RuntimeError(
                 f"Cannot connect to Chrome at {self.cdp_url}. "
@@ -196,7 +218,18 @@ class BrowserFoundationBrain:
 
         # --- Phase 1: type and submit -----------------------------------------
         input_sel = _INPUT_SELECTORS[self.provider]
-        inp = page.wait_for_selector(input_sel, timeout=15_000)
+        try:
+            inp = page.wait_for_selector(input_sel, timeout=15_000)
+        except TimeoutError as exc:
+            # No chat input: the provider redirected us to a login wall. We are
+            # already navigated there, so bring that tab to the front — the login
+            # is now 'popped' in the ORAC browser window — and raise an explicit,
+            # actionable signal instead of an opaque timeout the loop would retry.
+            try:
+                page._session.call("Page.bringToFront")
+            except Exception:  # noqa: BLE001 — surfacing login matters more than focus
+                pass
+            raise BrowserLoginRequired(self.provider, url) from exc
         inp.click()
         page.keyboard.press("Control+a")
         page.keyboard.type(text, delay=5)
@@ -351,6 +384,50 @@ def launch_chrome(chrome_path: str, cdp_port: int, profile_dir: Path) -> None:
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(args, **kwargs)
+
+
+def provider_login_ready(provider: str, cdp_url: str, *, settle: float = 3.0) -> bool:
+    """True if *provider* has a logged-in session (its chat input is present).
+
+    Read-only: navigates the ORAC browser to the provider and checks for the
+    input box. A login wall has no input, so this returns False.
+    """
+    sel = _INPUT_SELECTORS.get(provider)
+    url = _PROVIDER_URLS.get(provider)
+    if sel is None or url is None:
+        raise ValueError(f"Unknown browser foundation provider: {provider!r}.")
+    try:
+        with _open_browser_page(cdp_url, timeout=30.0) as page:
+            page.goto(url)
+            time.sleep(settle)
+            return bool(
+                page._session.evaluate(f"!!document.querySelector({json.dumps(sel)})")
+            )
+    except (BrowserPrimitiveError, OSError, URLError):
+        return False
+
+
+def pop_provider_login(provider: str, cdp_url: str, *, settle: float = 3.0) -> bool:
+    """Surface *provider*'s login when needed.
+
+    Opens the provider in the ORAC browser. If already logged in, returns True
+    and does nothing further. If not, brings that tab to the front so the login
+    page is 'popped' in front of the operator, and returns False. Useful for an
+    unattended start: sign in once, then the loop can use the provider.
+    """
+    if provider_login_ready(provider, cdp_url, settle=settle):
+        return True
+    url = _PROVIDER_URLS[provider]
+    try:
+        with _open_browser_page(cdp_url, timeout=30.0) as page:
+            page.goto(url)
+            try:
+                page._session.call("Page.bringToFront")
+            except Exception:  # noqa: BLE001 — focus is best-effort
+                pass
+    except (BrowserPrimitiveError, OSError, URLError):
+        pass
+    return False
 
 
 def ensure_browser_foundation_ready(
