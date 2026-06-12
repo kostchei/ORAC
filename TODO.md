@@ -6,12 +6,13 @@ before ORAC widens beyond the code-writing bootstrap.
 
 ## Safety and Verification
 
-- [ ] **Prove the governance path, not just the docs.** Add an explicit
-  verification checklist or smoke suite that confirms the council lenses,
-  Sentinel gate, fair-share band, standing-grant daily caps, and pending/notify
-  outcomes are actually wired through the dispatch path. These are load-bearing
-  controls; if any are only partially wired, the review-after posture becomes
-  risk-accepting rather than risk-managed.
+- [x] **Prove the governance path, not just the docs.**
+  `scripts/validate_governance_path.py` now runs a cross-cutting smoke suite
+  against real broker dispatch calls. It confirms clean allowed dispatch,
+  Intent block, Efficiency duplicate-write block, Optimise fair-share
+  escalation, Sentinel safety-critical escalation before dispatch,
+  review-after `git.push` notification, and standing-grant daily-cap fallback
+  to pending approval. Covered by `tests/test_governance_validation_script.py`.
 
 - [ ] **Document the council contract.** Give the council, Sentinel, fair-share
   band, churn lens, duplicate-write lens, and verdict aggregation their own
@@ -43,7 +44,13 @@ before ORAC widens beyond the code-writing bootstrap.
 
 ## State Durability
 
-- [ ] **Harden board state.** The board is ORAC's memory. Confirm atomic writes,
-  corruption recovery, and daemon-death behavior mid-tick. At minimum use
-  write-temp-then-rename for JSON state; preferably move toward an append-only
-  event log that can rebuild the board and unify with the audit trail.
+- [x] **Harden board state (minimum bar).** All JSON state writes
+  (`board.json`, `config.json`, `usage.json`) now go through
+  write-temp-then-rename (`BoardStore._save_atomic`): a daemon death mid-write
+  leaves the previous file intact, failed saves clean up their temp file, and a
+  corrupt board fails closed by raising rather than loading defaults. Covered
+  by `tests/test_storage.py`.
+
+- [ ] **Board event log.** The preferred end-state remains an append-only
+  event log that can rebuild the board and unify with the audit trail; the
+  atomic-write hardening above is the stopgap, not the destination.
