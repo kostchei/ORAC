@@ -127,6 +127,38 @@ _EFFICIENCY = [
              "    second = a + b  # computed again for no reason\n"
              "    try:\n        log.debug('first=%s second=%s', first, second)\n"
              "        return first\n    except Exception:\n        raise\n"),
+    EvalCase("Efficiency", "fail", "reinvented stdlib CSV",
+             "sum the amount column in sales.csv",
+             "def total_sales(path):\n"
+             "    total = 0\n"
+             "    lines = open(path).read().split('\\n')\n"
+             "    headers = lines[0].split(',')\n"
+             "    amount_idx = headers.index('amount')\n"
+             "    for line in lines[1:]:\n"
+             "        if line:\n"
+             "            total += float(line.split(',')[amount_idx])\n"
+             "    return total\n"),
+    EvalCase("Efficiency", "fail", "native date picker replaced",
+             "add a date picker to the form",
+             "import flatpickr from 'flatpickr';\n"
+             "import 'flatpickr/dist/flatpickr.css';\n"
+             "export function DatePicker() {\n"
+             "  return <input ref={(el) => el && flatpickr(el)} />;\n"
+             "}\n"),
+    EvalCase("Efficiency", "fail", "one implementation interface",
+             "save user settings to disk",
+             "class SettingsStore:\n    def save(self, settings): ...\n"
+             "class JsonSettingsStore(SettingsStore):\n"
+             "    def save(self, settings):\n"
+             "        import json\n"
+             "        json.dump(settings, open('settings.json', 'w'))\n"),
+    EvalCase("Efficiency", "fail", "manual dict loop",
+             "map keys to values",
+             "def pair(keys, values):\n"
+             "    result = {}\n"
+             "    for i in range(len(keys)):\n"
+             "        result[keys[i]] = values[i]\n"
+             "    return result\n"),
 ]
 
 CASES: tuple[EvalCase, ...] = tuple(_OPTIMISE + _SIMPLE + _EFFICIENCY)
