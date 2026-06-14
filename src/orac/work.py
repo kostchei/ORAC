@@ -349,11 +349,57 @@ def run_orchestrated_goal(
     """
     from orac.orchestrator import propose_decomposition  # noqa: PLC0415 (cycle)
     from orac.plan_review import review_decomposition  # noqa: PLC0415
+    from orac.decomposition import score_decomposition, validate_decomposition  # noqa: PLC0415
 
     if broker.store is None:
         raise ValueError("run_orchestrated_goal needs a store-backed broker.")
 
-    slices_plan = propose_decomposition(goal, intent, broker.store, brain, cap=cap, task=parent)
+    spec = WORK_KINDS[work_kind]
+    slices_plan = propose_decomposition(
+        goal, intent, broker.store, brain, cap=cap, task=parent,
+        work_kind=work_kind, default_verifiers=spec.verifiers,
+    )
+
+    # The deterministic floor (doc §4.3): reject structurally broken plans BEFORE
+    # spending model tokens on plan review. A missing verifier, a placeholder
+    # goal, or two slices owning the same resource are problems ORAC can see
+    # without judgment — the parent blocks with the reasons and spawns nothing.
+    free = broker.store.subagent_free_slots(cap)
+    errors = validate_decomposition(
+        parent,
+        slices_plan,
+        work_kind=work_kind,
+        known_work_kinds=set(WORK_KINDS),
+        allowed_verifiers=spec.verifiers,
+        doer_available=spec.doer_slug is not None,
+        max_slices=free,
+    )
+    if errors:
+        parent.add_log(
+            "Orchestrator",
+            f"Decomposition failed structural validation: {'; '.join(errors)}",
+        )
+        parent.transition(TaskStatus.BLOCKED)
+        return []
+
+    # Telemetry only (§10): the floor above is the gate; the score's recommendation
+    # is an operator-facing signal, not a second veto.
+    score = score_decomposition(
+        parent,
+        slices_plan,
+        work_kind=work_kind,
+        known_work_kinds=set(WORK_KINDS),
+        allowed_verifiers=spec.verifiers,
+        doer_available=spec.doer_slug is not None,
+        resource_slice=DEFAULT_RESOURCE_SLICE,
+        max_slices=free,
+    )
+    parent.add_log(
+        "Optimise",
+        f"Decomposition scored {score.recommendation} "
+        f"({score.slice_count} slice(s), est cost {score.estimated_cost:.2f}).",
+    )
+
     verdict = review_decomposition(intent, slices_plan, brain, task=parent)
     if verdict.status is not CapabilityStatus.ALLOWED:
         parent.add_log(

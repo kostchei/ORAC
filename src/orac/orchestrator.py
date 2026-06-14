@@ -5,6 +5,7 @@ from typing import Any
 from orac.agent_registry import load_agent_profiles
 from orac.agent_session import parse_decision
 from orac.broker_store import MAX_SUBAGENTS, BrokerStore
+from orac.decomposition import normalize_decomposition
 from orac.llm import Brain
 from orac.models import Task
 
@@ -76,13 +77,23 @@ def propose_decomposition(
     *,
     cap: int = MAX_SUBAGENTS,
     task: Task | None = None,
+    work_kind: str = "code",
+    default_verifiers: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
-    """Ask the Orchestrator to decompose ``goal`` into intent slices.
+    """Ask the Orchestrator to decompose ``goal`` into slice contracts.
 
     The prompt carries the live free-slot count (the frame). Output is validated
     and fail-closed: an unparseable or empty plan raises, and a plan that exceeds
     the budget the model was honestly given raises too — the deterministic floor
     will not honour more slices than slots, so the frame is never a bluff.
+
+    The returned slices are full, canonical *contracts* (one owner, bounded
+    resources, a named verifier), not bare ``{sub_intent, goal}`` pairs: the
+    model's richer fields are preserved through ``normalize_decomposition``
+    rather than flattened away, and a slice that omitted its verifier inherits
+    the work kind's ``default_verifiers``. The deterministic floor proper
+    (``decomposition.validate_decomposition``) runs in ``run_orchestrated_goal``,
+    over these contracts, before the model plan-review.
     """
     free = store.subagent_free_slots(cap)
     prompt = (
@@ -109,17 +120,17 @@ def propose_decomposition(
     if not isinstance(raw, list) or not raw:
         raise ValueError("Orchestrator decomposition has no slices.")
 
-    slices: list[dict[str, Any]] = []
     for entry in raw:
         if not isinstance(entry, dict) or "sub_intent" not in entry:
             raise ValueError(f"Decomposition slice missing 'sub_intent': {entry!r}")
-        slices.append(
-            {
-                "sub_intent": str(entry["sub_intent"]),
-                "goal": str(entry.get("goal", entry["sub_intent"])),
-                "acceptance_criteria": [str(c) for c in entry.get("acceptance_criteria", [])],
-            }
-        )
+
+    # Preserve the full contract shape (one owner, named verifier, return
+    # evidence) instead of flattening to {sub_intent, goal}; default each slice's
+    # verifier from the work kind so the floor's "no slice without a verifier"
+    # holds before it runs.
+    slices = normalize_decomposition(
+        raw, work_kind=work_kind, default_verifiers=default_verifiers
+    )
 
     if len(slices) > free:
         raise ValueError(
