@@ -135,6 +135,8 @@ def run_goal_task(
     max_steps: int = 16,
     intent: str | None = None,
     resource_slice: float = DEFAULT_RESOURCE_SLICE,
+    contract_metadata: dict[str, Any] | None = None,
+    max_repairs: int = 0,
 ) -> Task:
     """Spawn the kind's doer against a goal; the model decides how.
 
@@ -144,6 +146,14 @@ def run_goal_task(
     roster) and its final state is written back, so the live free-count stays
     truthful. ``intent`` records what slice of the parent intent this child
     carries (defaults to the goal).
+
+    ``contract_metadata`` carries the slice's scope (allowed/forbidden tools,
+    owned paths) onto the child's contract so the broker can enforce it. With
+    ``max_repairs`` > 0, a verification failure is not the end: the doer is
+    re-run up to that many times with the failure detail injected ("fix exactly
+    this"), a bounded repair loop rather than a broad retry. It is opt-in
+    (default 0) — the decomposition path enables it; a bare single-goal build
+    keeps the original block-on-first-failure behaviour.
     """
     try:
         spec = WORK_KINDS[work_kind]
@@ -159,13 +169,17 @@ def run_goal_task(
             "claim done needs an independent check before DONE is granted."
         )
 
+    contract_data: dict[str, Any] = {"goal": goal, "kind": spec.kind}
+    if contract_metadata:
+        contract_data.update(contract_metadata)
+
     child = Task(
         title=f"[{spec.kind}] {goal}",
         description=goal,
         parent_id=parent.id,
         status=TaskStatus.IN_PROGRESS,
         acceptance_criteria=list(acceptance_criteria),
-        metadata={"contract": {"goal": goal, "kind": spec.kind}},
+        metadata={"contract": contract_data},
     )
     board.add_task(child)
 
@@ -213,27 +227,47 @@ def run_goal_task(
         if broker.store is not None and subagent_id is not None:
             broker.store.set_subagent_status(subagent_id, status)
 
+    current_contract = contract
+    repairs = 0
     session = AgentSession(profile=doer, brain=brain, broker=broker, max_steps=max_steps)
-    result = session.run(child, contract)
 
-    if result.status == "done":
-        # Generation is cheap, verification is scarce: the doer's self-reported
-        # "done" is a claim, not proof. Independently confirm the kind's
-        # done-means before granting DONE; a failed or unrunnable check blocks
-        # the task rather than trusting the summary (most likely live-fire
-        # failure: a local model declaring victory with red or unrun tests).
-        ok, detail = verify_goal_done(spec, child, broker, context)
-        if ok:
-            child.transition(TaskStatus.DONE)
-            _retire("done")
-            parent.add_log(
-                "Orchestrator",
-                f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
-            )
-        else:
-            child.add_log(
-                doer.name, f"Claimed done, but verification failed: {detail}"
-            )
+    while True:
+        result = session.run(child, current_contract)
+
+        if result.status == "done":
+            # Generation is cheap, verification is scarce: the doer's self-reported
+            # "done" is a claim, not proof. Independently confirm the kind's
+            # done-means before granting DONE; a failed or unrunnable check blocks
+            # the task rather than trusting the summary (most likely live-fire
+            # failure: a local model declaring victory with red or unrun tests).
+            ok, detail = verify_goal_done(spec, child, broker, context)
+            if ok:
+                child.transition(TaskStatus.DONE)
+                _retire("done")
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
+                )
+                break
+            if repairs < max_repairs:
+                # Bounded repair, not a broad retry: re-run the doer in a fresh
+                # session with the exact failure injected and a "fix only this"
+                # rule, so it corrects the named defect rather than redoing the
+                # slice (rugged decomposition §4.5–4.8).
+                repairs += 1
+                child.add_log(
+                    doer.name,
+                    f"Claimed done, but verification failed: {detail}. "
+                    f"Repair attempt {repairs}/{max_repairs}.",
+                )
+                current_contract = _repair_contract(
+                    spec, child, goal, acceptance_criteria, context, detail
+                )
+                session = AgentSession(
+                    profile=doer, brain=brain, broker=broker, max_steps=max_steps
+                )
+                continue
+            child.add_log(doer.name, f"Claimed done, but verification failed: {detail}")
             child.transition(TaskStatus.BLOCKED)
             _retire("blocked")
             parent.transition(TaskStatus.BLOCKED)
@@ -242,19 +276,42 @@ def run_goal_task(
                 f"{spec.kind} subtask {child.id} blocked: claimed done but "
                 f"verification failed: {detail}",
             )
-    elif result.status == "pending":
-        # Parked for approval: still live (holds its roster slot) until resolved.
-        child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
-        parent.add_log(
-            "Orchestrator",
-            f"{spec.kind} subtask {child.id} parked for approval (pending {result.pending_id}).",
-        )
-    else:
+            break
+        if result.status == "pending":
+            # Parked for approval: still live (holds its roster slot) until resolved.
+            child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
+            parent.add_log(
+                "Orchestrator",
+                f"{spec.kind} subtask {child.id} parked for approval (pending {result.pending_id}).",
+            )
+            break
         child.transition(TaskStatus.BLOCKED)
         _retire("blocked")
         parent.transition(TaskStatus.BLOCKED)
         parent.add_log("Orchestrator", f"{spec.kind} subtask {child.id} blocked: {result.summary}")
+        break
     return child
+
+
+def _repair_contract(
+    spec: WorkKindSpec,
+    child: Task,
+    goal: str,
+    acceptance_criteria: tuple[str, ...],
+    context: dict[str, Any],
+    detail: str,
+) -> str:
+    """The contract for a repair attempt: the original plus the named failure."""
+    return CONTRACT_TEMPLATE.format(
+        goal=goal,
+        criteria="\n".join(f"- {c}" for c in acceptance_criteria) or "- (none given)",
+        context="\n".join(f"- {k}: {v}" for k, v in context.items())
+        + f"\n- VERIFICATION FAILURE: {detail}",
+        rules=spec.contract_rules.format(task_id=child.id)
+        + "\n- Fix exactly this verification failure; keep your other changes and "
+        "make no unrelated edits.",
+        done_means=spec.done_means,
+    )
 
 
 def run_decomposed_goal(
@@ -269,16 +326,19 @@ def run_decomposed_goal(
     max_steps: int = 16,
     resource_slice: float = DEFAULT_RESOURCE_SLICE,
     band: float = ACTIVE_SLICE_CEILING,
+    max_repairs: int = 0,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
 
-    ``decomposition`` is the Orchestrator's plan: a list of
-    ``{sub_intent, goal, acceptance_criteria}``. Each slice carries its piece of
-    ``intent`` faithfully into its child contract (instruction-down); the ledger
-    is the deterministic guarantee that no slice is dropped and that the parent's
-    status reflects true coverage — the floor under "remind the Orchestrator his
-    job is not finished".
+    ``decomposition`` is the Orchestrator's plan: a list of slice contracts. Each
+    slice carries its piece of ``intent`` faithfully into its child contract
+    (instruction-down), its scope (allowed/forbidden tools, owned paths) onto the
+    child for the broker to enforce, and its ``inputs`` into the child's context;
+    the ledger is the deterministic guarantee that no slice is dropped and that
+    the parent's status reflects true coverage. ``max_repairs`` enables the doer
+    repair loop per slice (rugged decomposition §4.5–4.8) — opt-in, default 0;
+    ``run_orchestrated_goal`` (the full fan-out) turns it on.
     """
     open_ledger(parent, intent, decomposition)
     children: list[Task] = []
@@ -299,6 +359,13 @@ def run_decomposed_goal(
                     f"Spawn of {slice_['sub_intent']!r} deferred: {decision.reason}",
                 )
                 continue
+        # Carry the slice's scope onto the child (the broker enforces it) and its
+        # inputs into the child's context.
+        contract_metadata = {
+            key: slice_[key]
+            for key in ("allowed_tools", "forbidden_tools", "owned_paths_or_resources")
+            if key in slice_
+        }
         child = run_goal_task(
             board=board,
             parent=parent,
@@ -307,10 +374,12 @@ def run_decomposed_goal(
             work_kind=work_kind,
             brain=brain,
             broker=broker,
-            context=context,
+            context={**context, **dict(slice_.get("inputs", {}) or {})},
             max_steps=max_steps,
             intent=slice_["sub_intent"],
             resource_slice=resource_slice,
+            contract_metadata=contract_metadata or None,
+            max_repairs=max_repairs,
         )
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
@@ -337,6 +406,7 @@ def run_orchestrated_goal(
     max_steps: int = 16,
     cap: int = MAX_SUBAGENTS,
     band: float = ACTIVE_SLICE_CEILING,
+    max_repairs: int = 2,
 ) -> list[Task]:
     """The full fan-out: propose a decomposition (with the abundance frame),
     review the plan (the counterweight), then dispatch each slice through the
@@ -416,7 +486,7 @@ def run_orchestrated_goal(
     )
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, brain, broker, context,
-        max_steps=max_steps, band=band,
+        max_steps=max_steps, band=band, max_repairs=max_repairs,
     )
 
 

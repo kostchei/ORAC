@@ -198,3 +198,66 @@ def safety_critical_paths_touched(
         return []
     candidates = raw if isinstance(raw, (list, tuple)) else [raw]
     return [str(p) for p in candidates if _matches_critical(str(p))]
+
+
+# --- Slice-contract scope (rugged decomposition invariant #4) ----------------
+#
+# A doer running a decomposed slice may use only the tools, and touch only the
+# paths, its contract grants. The broker enforces this at the edge so "one owner
+# per mutable surface" is a runtime guarantee, not just a plan-time check. Empty
+# or absent contract fields impose no restriction, so a plain (non-slice)
+# contract and an unscoped slice pass straight through.
+
+
+def _path_owned(target: str, owned_paths: list[str]) -> bool:
+    """True if ``target`` falls within any owned path, on a segment boundary.
+
+    Matching is on the normalised POSIX form so a relative owned entry matches an
+    absolute target (the builder writes absolute paths) and an owned directory
+    matches files nested under it — without partial-name false positives (owned
+    ``test`` does not match ``tests/x``).
+    """
+    target_bounded = "/" + _normalise(target).strip("/") + "/"
+    for raw in owned_paths:
+        owned = _normalise(str(raw)).strip("/")
+        if owned and ("/" + owned + "/") in target_bounded:
+            return True
+    return False
+
+
+def contract_denial(
+    tool: str, args: dict[str, Any] | None, contract: dict[str, Any] | None
+) -> str | None:
+    """Return a denial reason if a call violates the slice contract's scope, else None.
+
+    - ``forbidden_tools``: an explicit deny-list.
+    - ``allowed_tools``: when non-empty, an allow-list — any other tool is denied.
+    - ``owned_paths_or_resources``: when non-empty, a path-bearing write/commit may
+      only touch paths the slice owns.
+    """
+    if not contract:
+        return None
+    forbidden = _as_str_list(contract.get("forbidden_tools"))
+    if forbidden and tool in forbidden:
+        return f"tool {tool!r} is forbidden by the slice contract"
+    allowed = _as_str_list(contract.get("allowed_tools"))
+    if allowed and tool not in allowed:
+        return f"tool {tool!r} is not in the slice contract's allowed_tools"
+    owned = _as_str_list(contract.get("owned_paths_or_resources"))
+    if owned:
+        key = _PATH_BEARING_TOOLS.get(tool)
+        if key and args:
+            raw = args.get(key)
+            candidates = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+            for candidate in candidates:
+                if not _path_owned(str(candidate), owned):
+                    return f"path {candidate!r} is not owned by the slice contract"
+    return None
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]

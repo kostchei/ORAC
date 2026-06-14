@@ -97,16 +97,37 @@ class Scrum:
         done = sum(1 for task in board.tasks if task.status == TaskStatus.DONE)
         return ScrumRunResult(cycles=cycles, touched_tasks=len(touched), done_tasks=done)
 
+    def _should_decompose(self, task: Task) -> bool:
+        """Whether a goal earns the decomposition fan-out over a single doer.
+
+        Decomposition is a cost — trivial work stays single-doer (rugged
+        decomposition §2 small-goal bypass). The signals are structural, not
+        string-sniffing: an explicit ``decompose`` flag overrides either way;
+        otherwise a goal earns a fan-out when it is estimated large (points > 1)
+        or its description spells out several steps (> 5 lines).
+        """
+        if self.broker is None or self.broker.store is None:
+            return False
+        flag = task.metadata.get("decompose")
+        if flag is True:
+            return True
+        if flag is False:
+            return False
+        if task.points > 1:
+            return True
+        return len((task.description or "").splitlines()) > 5
+
     def _build_if_goal_task(self, board: Board, task: Task) -> bool:
         """Goal tasks are really executed by their kind's doer session, not
-        theatrically advanced by the council state machine."""
+        theatrically advanced by the council state machine. A goal that earns it
+        (see ``_should_decompose``) fans out across subagents; otherwise one doer
+        owns it."""
         if self.broker is None or self.root is None:
             return False
         if task.work_kind is None or "goal" not in task.metadata:
             return False
         if task.status != TaskStatus.READY:
             return False
-        from orac.work import run_goal_task
 
         task.transition(TaskStatus.IN_PROGRESS)
         # A UI goal declares the URL of its running app in metadata; threading it
@@ -118,10 +139,33 @@ class Scrum:
             value = task.metadata.get(key)
             if value:
                 context[key] = str(value)
+        goal = str(task.metadata["goal"])
+
+        if self._should_decompose(task):
+            from orac.work import run_orchestrated_goal
+
+            run_orchestrated_goal(
+                board=board,
+                parent=task,
+                goal=goal,
+                intent=task.description or goal,
+                work_kind=task.work_kind,
+                brain=self._session_brain(task),
+                broker=self.broker,
+                context=context,
+            )
+            # run_orchestrated_goal settles the parent against the intent ledger
+            # (DONE when covered, BLOCKED when a slice is); only escalation is ours.
+            if task.status == TaskStatus.BLOCKED:
+                self._maybe_escalate(task)
+            return True
+
+        from orac.work import run_goal_task
+
         child = run_goal_task(
             board=board,
             parent=task,
-            goal=str(task.metadata["goal"]),
+            goal=goal,
             acceptance_criteria=tuple(task.acceptance_criteria),
             work_kind=task.work_kind,
             brain=self._session_brain(task),

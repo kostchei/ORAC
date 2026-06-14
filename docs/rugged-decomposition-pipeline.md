@@ -187,17 +187,32 @@ integrate.
 - `decomposition.py` — `SliceContract`, `normalize_decomposition`,
   `validate_decomposition`, `score_decomposition` (the deterministic floor + the
   contract shape, §3 / §8 steps 1–3).
-- `propose_decomposition` now preserves full contracts and defaults each slice's
+- `propose_decomposition` preserves full contracts and defaults each slice's
   verifier from the work kind (§4.2), instead of flattening to `{sub_intent, goal}`.
 - `run_orchestrated_goal` runs the deterministic floor **before** the model
   plan-review (§4.3): a structurally broken plan blocks the parent and spends no
   model tokens; the `score_decomposition` recommendation is logged as telemetry.
+- **Contract carried end-to-end.** The intent ledger (`intent_ledger._ledger_entry`)
+  keeps the full contract per slice; `run_decomposed_goal` threads each slice's
+  scope onto its child and its `inputs` into the child's context.
+- **Broker enforces the contract at the edge** (`policy.contract_denial`, called in
+  `broker._decide`): a doer is denied a tool its slice forbids / does not allow, or
+  a write/commit outside its `owned_paths` — invariant #4 ("one owner per surface")
+  as a runtime guarantee, not just a plan-time check. Empty/absent fields impose no
+  restriction, so non-slice contracts pass through.
+- **Bounded repair loop** (`run_goal_task(max_repairs=...)`, §4.5–4.8): a verifier
+  failure re-runs the doer with the exact failure injected and a "fix only this"
+  rule, up to N times, before blocking. Opt-in (default 0); the orchestrated fan-out
+  turns it on (default 2).
+- **Scrum routing** (`Scrum._should_decompose`): a goal earns the fan-out when it is
+  estimated large (points > 1), spells out several steps (> 5 description lines), or
+  sets an explicit `decompose` flag; otherwise one doer owns it. Structural signals,
+  no string-sniffing.
 
-**Still open (tracked in the roadmap's decomposition section):**
+**Still open:**
 
-- Carry the full contract (verifier/owned paths/return evidence) into the child's
-  contract and the intent ledger, not just `{sub_intent, goal, acceptance}`.
 - Promote the per-slice RETURN edge to a full council review (today it is the
-  deterministic `verify_goal_done` floor).
-- Repair slices as first-class on verifier failure (§4.5–4.8).
-- Wire `run_orchestrated_goal` into the daemon loop behind a goal-size heuristic.
+  deterministic `verify_goal_done` floor + the repair loop).
+- Make repair a *new focused slice* rather than an in-place re-run, so the repair is
+  itself contract-bounded and reviewable.
+- Let subagents recurse (the register cap already bounds depth globally).

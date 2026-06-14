@@ -17,6 +17,24 @@ from orac.models import Task
 
 _LEDGER_KEY = "intent_decomposition"
 
+# The slice-contract fields carried alongside the bookkeeping ones, so the full
+# contract (one owner, named verifier, return evidence) survives the parent's
+# board save/load round-trip and is available to the child and the broker's
+# contract-scope enforcement — not just {sub_intent, goal, acceptance_criteria}.
+_SLICE_EXTRA_KEYS = (
+    "work_kind",
+    "inputs",
+    "allowed_tools",
+    "forbidden_tools",
+    "owned_paths_or_resources",
+    "verifier",
+    "risk_class",
+    "budget",
+    "expected_artifact",
+    "return_evidence",
+    "integration_note",
+)
+
 # A slice is one piece of the decomposed intent, mapped to one child task.
 SLICE_OPEN = "open"
 SLICE_SATISFIED = "satisfied"
@@ -36,17 +54,23 @@ def open_ledger(parent: Task, intent: str, slices: list[dict[str, Any]]) -> None
         raise ValueError(f"Task {parent.id} already has an intent ledger.")
     parent.metadata[_LEDGER_KEY] = {
         "intent": intent,
-        "slices": [
-            {
-                "sub_intent": str(s["sub_intent"]),
-                "goal": str(s.get("goal", s["sub_intent"])),
-                "acceptance_criteria": [str(c) for c in s.get("acceptance_criteria", [])],
-                "child_id": None,
-                "status": SLICE_OPEN,
-            }
-            for s in slices
-        ],
+        "slices": [_ledger_entry(s) for s in slices],
     }
+
+
+def _ledger_entry(s: dict[str, Any]) -> dict[str, Any]:
+    """One ledger slice: the bookkeeping fields plus any contract fields present."""
+    entry: dict[str, Any] = {
+        "sub_intent": str(s["sub_intent"]),
+        "goal": str(s.get("goal", s["sub_intent"])),
+        "acceptance_criteria": [str(c) for c in s.get("acceptance_criteria", [])],
+        "child_id": None,
+        "status": SLICE_OPEN,
+    }
+    for key in _SLICE_EXTRA_KEYS:
+        if key in s:
+            entry[key] = s[key]
+    return entry
 
 
 def has_ledger(parent: Task) -> bool:

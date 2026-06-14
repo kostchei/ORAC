@@ -20,7 +20,7 @@ from orac.models import (
     ReviewContext,
     Task,
 )
-from orac.policy import ApprovalMode, approval_mode_for, risk_class
+from orac.policy import ApprovalMode, approval_mode_for, contract_denial, risk_class
 from orac.tooling import RegularToolExecutor
 
 
@@ -137,6 +137,20 @@ class ToolBroker:
                 status=CapabilityStatus.DENIED,
                 tool=req.tool,
                 message=f"Agent {req.agent!r} is not granted tool {req.tool!r}.",
+            )
+
+        # Slice-contract scope (rugged decomposition invariant #4): a doer running
+        # a decomposed slice may use only the tools and touch only the paths its
+        # contract grants. Empty/absent fields impose no restriction, so plain
+        # (non-slice) contracts pass through. Checked before the council so an
+        # out-of-scope call is refused as an admission error, not reviewed.
+        contract = task.metadata.get("contract") if task is not None else None
+        denial = contract_denial(
+            req.tool, req.args, contract if isinstance(contract, dict) else None
+        )
+        if denial is not None:
+            return CapabilityResult(
+                status=CapabilityStatus.DENIED, tool=req.tool, message=denial
             )
 
         # Edge-check council (design §4.2-§4.3): four deterministic lenses
