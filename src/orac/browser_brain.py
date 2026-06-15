@@ -195,6 +195,12 @@ class BrowserFoundationBrain:
     diagnostics_dir: str | None = field(
         default_factory=lambda: os.environ.get("ORAC_BROWSER_DIAGNOSTICS") or None
     )
+    # Bounded retry of the connect→navigate→locate-input prefix only (a flaky CDP
+    # connect, a navigation that timed out, a half-loaded page). The send and
+    # everything after it run exactly once and are NEVER retried — a retry there
+    # could double-submit the prompt.
+    connect_retries: int = 2
+    retry_backoff_seconds: float = 1.0
 
     # Brain interface ----------------------------------------------------------
 
@@ -238,23 +244,57 @@ class BrowserFoundationBrain:
         return prompt
 
     def _send_and_receive(self, text: str) -> str:
-        try:
-            ctx = _open_browser_page(self.cdp_url, timeout=30.0)
-            with ctx as page:
-                try:
-                    return self._chat(page, text)
-                finally:
-                    page.close()
-        except Exception as exc:
-            if isinstance(
-                exc,
-                (TimeoutError, ValueError, BrowserLoginRequired, BrowserProviderError),
-            ):
+        # Retry ONLY the connect→navigate→locate-input prefix. A login wall is a
+        # human-action signal (not retryable); a ValueError (unknown provider) is a
+        # config fault. Everything from the send onward runs exactly once.
+        attempts = max(1, self.connect_retries + 1)
+        for attempt in range(attempts):
+            ctx = None
+            page = None
+            try:
+                ctx = _open_browser_page(self.cdp_url, timeout=30.0)
+                page = ctx.__enter__()
+                sel, before_count, inp = self._navigate_and_locate(page)
+            except BrowserLoginRequired:
+                self._close(ctx, page)
                 raise
-            raise RuntimeError(
-                f"Cannot connect to Chrome at {self.cdp_url}. "
-                "Start Chrome with: chrome --remote-debugging-port=9222 --no-first-run"
-            ) from exc
+            except (OSError, BrowserPrimitiveError, TimeoutError) as exc:
+                # Transient connect / navigate / CDP fault — discard this page and
+                # try a fresh connection, up to the retry budget.
+                self._close(ctx, page)
+                if attempt + 1 < attempts:
+                    if self.retry_backoff_seconds > 0:
+                        time.sleep(self.retry_backoff_seconds)
+                    continue
+                raise RuntimeError(
+                    f"Cannot connect to Chrome at {self.cdp_url} after {attempts} "
+                    "attempt(s). Start Chrome with: "
+                    "chrome --remote-debugging-port=9222 --no-first-run"
+                ) from exc
+            except Exception:  # noqa: BLE001 — config/other fault: close, don't retry
+                self._close(ctx, page)
+                raise
+            # Past the locate boundary: send + wait happen once (before_count
+            # recorded the pre-submit response count, so no double-submit on retry).
+            try:
+                return self._converse(page, sel, before_count, inp, text)
+            finally:
+                self._close(ctx, page)
+        # Unreachable: the loop either returns or raises on the last attempt.
+        raise RuntimeError(f"Cannot connect to Chrome at {self.cdp_url}.")
+
+    @staticmethod
+    def _close(ctx: Any, page: Any) -> None:
+        if page is not None:
+            try:
+                page.close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+        if ctx is not None:
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
 
     def _capture_diagnostics(self, page: Any, label: str) -> str | None:
         """Best-effort screenshot + DOM snapshot of a failing page.
@@ -284,17 +324,20 @@ class BrowserFoundationBrain:
         except Exception:  # noqa: BLE001 — diagnostics are best-effort
             return None
 
-    def _chat(self, page: Any, text: str) -> str:
+    def _navigate_and_locate(self, page: Any) -> tuple[ProviderSelectors, int, Any]:
+        """The retryable prefix: navigate to the provider and find the chat input.
+
+        Returns the resolved selectors, the pre-submit response count (for the
+        new-turn check), and the input element. Raises BrowserLoginRequired when
+        no input candidate matches (a login wall or rotted input selectors) —
+        a human-action signal the caller must NOT retry.
+        """
         sel = _provider(self.provider)
-        url = sel.url
+        page.goto(sel.url, wait_until="networkidle", timeout=30_000)
 
-        page.goto(url, wait_until="networkidle", timeout=30_000)
+        # Count existing response elements before submission (the new-turn check).
+        before_count = len(page.query_selector_all(sel.response))
 
-        # --- Phase 0: count existing response elements before submission ------
-        response_sel = sel.response
-        before_count = len(page.query_selector_all(response_sel))
-
-        # --- Phase 1: type and submit -----------------------------------------
         try:
             inp = _wait_for_first(page, sel.input, timeout_ms=15_000)
         except (TimeoutError, Exception) as exc:  # noqa: BLE001
@@ -308,7 +351,18 @@ class BrowserFoundationBrain:
             except Exception:  # noqa: BLE001 — surfacing login matters more than focus
                 pass
             self._capture_diagnostics(page, f"{self.provider}-no-input")
-            raise BrowserLoginRequired(self.provider, url) from exc
+            raise BrowserLoginRequired(self.provider, sel.url) from exc
+        return sel, before_count, inp
+
+    def _converse(
+        self, page: Any, sel: ProviderSelectors, before_count: int, inp: Any, text: str
+    ) -> str:
+        """Submit the prompt once and wait for the completed reply. Runs exactly
+        once per call — the retry loop never re-enters here, so the prompt is
+        never submitted twice."""
+        response_sel = sel.response
+
+        # --- Phase 1: type and submit -----------------------------------------
         inp.click()
         page.keyboard.press("Control+a")
         page.keyboard.type(text, delay=5)
@@ -392,23 +446,6 @@ class BrowserFoundationBrain:
             )
         _check_provider_error(self.provider, text)
         return text
-
-
-def _extract_new_text(before: str, after: str) -> str:
-    """Return the portion of ``after`` that was not present in ``before``.
-
-    Uses a tail-anchor heuristic: find the last ~100 chars of ``before``
-    in ``after``, then return everything that follows.  Works regardless of
-    provider UI structure.
-    """
-    if len(after) <= len(before):
-        return after.strip()
-    anchor = before[-100:].strip() if len(before) > 100 else before.strip()
-    idx = after.rfind(anchor)
-    if idx >= 0:
-        tail = after[idx + len(anchor):]
-        return tail.strip()
-    return after[len(before):].strip()
 
 
 # ---------------------------------------------------------------------------

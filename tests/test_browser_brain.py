@@ -9,7 +9,6 @@ import pytest
 import orac.browser_brain as bb
 from orac.browser_brain import (
     BrowserFoundationBrain,
-    _extract_new_text,
     cdp_reachable,
     ensure_browser_foundation_ready,
 )
@@ -176,15 +175,66 @@ def test_unknown_provider_raises(monkeypatch) -> None:
 
 def test_cdp_connection_failure_raises_runtime_error(monkeypatch) -> None:
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    calls = [0]
 
     def fail_open(*_args: object, **_kwargs: object) -> object:
+        calls[0] += 1
         raise OSError("connection refused")
 
     monkeypatch.setattr(bb, "_open_browser_page", fail_open)
 
-    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    brain = BrowserFoundationBrain(
+        provider="claude", stabilise_seconds=0, poll_interval=0,
+        connect_retries=2, retry_backoff_seconds=0,
+    )
     with pytest.raises(RuntimeError, match="Cannot connect to Chrome"):
         brain.think("builder", "doer", task, "prompt")
+    assert calls[0] == 3, "connect should be retried connect_retries+1 times"
+
+
+def test_connect_retry_recovers_from_transient_open_failure(monkeypatch) -> None:
+    # A flaky CDP connect on the first attempt is retried; the second succeeds and
+    # the full round trip completes (no double-submit — retry is pre-send).
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(response_el_text="recovered", provider="claude")
+    ok_cm = _make_page_cm(page)
+    calls = [0]
+
+    def flaky_open(*args: object, **kwargs: object) -> object:
+        calls[0] += 1
+        if calls[0] == 1:
+            raise OSError("cdp not ready yet")
+        return ok_cm(*args, **kwargs)
+
+    monkeypatch.setattr(bb, "_open_browser_page", flaky_open)
+    brain = BrowserFoundationBrain(
+        provider="claude", stabilise_seconds=0, poll_interval=0, retry_backoff_seconds=0,
+    )
+    assert brain.think("builder", "doer", task, "hi") == "recovered"
+    assert calls[0] == 2, "should have retried exactly once after the transient failure"
+
+
+def test_login_wall_is_not_retried(monkeypatch) -> None:
+    # A login wall is a human-action signal, not a transient fault: it must raise
+    # immediately without burning the connect-retry budget.
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(provider="claude")
+    page.wait_for_selector.side_effect = TimeoutError("no input box")
+    calls = [0]
+    ok_cm = _make_page_cm(page)
+
+    def counted_open(*args: object, **kwargs: object) -> object:
+        calls[0] += 1
+        return ok_cm(*args, **kwargs)
+
+    monkeypatch.setattr(bb, "_open_browser_page", counted_open)
+    brain = BrowserFoundationBrain(
+        provider="claude", stabilise_seconds=0, poll_interval=0,
+        connect_retries=3, retry_backoff_seconds=0,
+    )
+    with pytest.raises(bb.BrowserLoginRequired):
+        brain.think("builder", "doer", task, "hi")
+    assert calls[0] == 1, "login wall must not be retried"
 
 
 def test_send_button_fallback_to_enter_when_not_found(monkeypatch) -> None:
@@ -421,28 +471,6 @@ def test_browser_doctor_unreachable_is_reported_not_raised(monkeypatch) -> None:
     report = bb.browser_doctor("claude", "http://localhost:9222", probe=False, settle=0)
     assert report["error"] and "cannot reach" in report["error"]
     assert "ERROR" in bb.format_doctor_report(report)
-
-
-# ---------------------------------------------------------------------------
-# _extract_new_text helper
-# ---------------------------------------------------------------------------
-
-
-def test_extract_new_text_removes_before_prefix() -> None:
-    before = "header nav sidebar"
-    after = "header nav sidebar\nUser: question\nAI: actual answer"
-    result = _extract_new_text(before, after)
-    assert "actual answer" in result
-
-
-def test_extract_new_text_short_before() -> None:
-    result = _extract_new_text("hi", "hi\nnew stuff")
-    assert "new stuff" in result
-
-
-def test_extract_new_text_no_new_content() -> None:
-    result = _extract_new_text("same", "same")
-    assert result == "same"
 
 
 def test_logged_out_provider_raises_login_required(monkeypatch) -> None:
