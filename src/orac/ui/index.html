@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ORAC</title>
-    <link rel="stylesheet" href="/static/styles.css?v=loop-state-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=services-1" />
   </head>
   <body>
     <main class="shell">
@@ -22,6 +22,33 @@
       </header>
 
       <section id="run-status" class="run-status panel" aria-live="polite"></section>
+
+      <section class="panel services-panel">
+        <span class="kicker">Services</span>
+        <div class="services-grid">
+          <div class="service-row">
+            <div class="service-name"><strong>Agent loop</strong><span id="svc-loop-status" class="service-state">&hellip;</span></div>
+            <div class="service-actions">
+              <button id="svc-loop-start" type="button">Start</button>
+              <button id="svc-loop-stop" class="secondary-button" type="button">Stop</button>
+            </div>
+          </div>
+          <div class="service-row">
+            <div class="service-name"><strong>WhatsApp bridge</strong><span id="svc-wa-status" class="service-state">&hellip;</span></div>
+            <div class="service-actions">
+              <button id="svc-wa-start" type="button">Start</button>
+              <button id="svc-wa-stop" class="secondary-button" type="button">Stop</button>
+            </div>
+          </div>
+          <div class="service-row">
+            <div class="service-name"><strong>Chat control</strong><span id="svc-chat-status" class="service-state">&hellip;</span></div>
+            <div class="service-actions">
+              <button id="svc-chat-start" type="button">Start</button>
+              <button id="svc-chat-stop" class="secondary-button" type="button">Stop</button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section class="chat-summary panel">
         <span class="kicker">Connections</span>
@@ -248,6 +275,6 @@
         <div id="chat-message" class="settings-status"></div>
       </section>
     </aside>
-    <script src="/static/app.js?v=loop-state-1"></script>
+    <script src="/static/app.js?v=services-1"></script>
   </body>
 </html>

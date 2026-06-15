@@ -470,7 +470,68 @@ async function refresh() {
   renderTimeline(state.interactions);
   renderLoopStatusText(loopStatus);
   renderChat(chat);
+  renderServices(loopStatus, chat);
 }
+
+// The main-page Services panel: one start/stop pair per long-running service,
+// reusing the same endpoints as the controls in the Connections pane. The
+// webpage (UI server) is the persistent shell; these toggle the services it hosts.
+function setServiceRow(prefix, running, label) {
+  const status = document.querySelector(`#${prefix}-status`);
+  if (status) {
+    status.textContent = label;
+    status.classList.toggle("svc-on", running);
+    status.classList.toggle("svc-off", !running);
+  }
+  const start = document.querySelector(`#${prefix}-start`);
+  const stop = document.querySelector(`#${prefix}-stop`);
+  if (start) start.disabled = running;
+  if (stop) stop.disabled = !running;
+}
+
+function renderServices(loopStatus, chat) {
+  const runtime = chat.runtime || {};
+  const bridge = runtime.whatsapp_bridge || {};
+  const connectors = runtime.connectors || {};
+  const loopRunning = Boolean(loopStatus.running);
+  setServiceRow(
+    "svc-loop",
+    loopRunning,
+    loopStatus.stopping ? "stopping" : loopRunning ? "running" : "stopped",
+  );
+  const bridgeRunning = Boolean(bridge.running || bridge.external_running);
+  setServiceRow(
+    "svc-wa",
+    bridgeRunning,
+    bridge.running
+      ? `running pid ${bridge.pid}`
+      : bridge.external_running
+        ? "running externally"
+        : "stopped",
+  );
+  const connRunning = Boolean(connectors.running);
+  setServiceRow("svc-chat", connRunning, connRunning ? `running pid ${connectors.pid}` : "stopped");
+}
+
+function wireServiceButton(selector, path) {
+  const button = document.querySelector(selector);
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await postJson(path, {});
+    } finally {
+      await refresh();
+    }
+  });
+}
+
+wireServiceButton("#svc-loop-start", "/api/loop/start");
+wireServiceButton("#svc-loop-stop", "/api/loop/stop");
+wireServiceButton("#svc-wa-start", "/api/chat/runtime/whatsapp/start");
+wireServiceButton("#svc-wa-stop", "/api/chat/runtime/whatsapp/stop");
+wireServiceButton("#svc-chat-start", "/api/chat/runtime/connectors/start");
+wireServiceButton("#svc-chat-stop", "/api/chat/runtime/connectors/stop");
 
 document.querySelector("#request-form").addEventListener("submit", async (event) => {
   event.preventDefault();

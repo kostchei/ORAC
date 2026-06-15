@@ -1,3 +1,4 @@
+param([switch]$Restart)
 $ErrorActionPreference = "Stop"
 
 $Repo = "D:\code\ORAC"
@@ -17,7 +18,25 @@ function Test-OracServer {
     }
 }
 
-if (Test-OracServer) {
+function Stop-Orac {
+    # Stop ORAC's python services (the UI server, plus any chat run / whatsapp
+    # bridge launched from this repo). The UI server owns the loop thread and its
+    # connector subprocesses, so killing it stops those too.
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'orac\.cli' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # The node WhatsApp bridge on port 8788 is orphaned when its python parent
+    # dies and keeps holding the port, so a fresh bridge cannot bind. Clear it.
+    $conn = Get-NetTCPConnection -LocalPort 8788 -State Listen -ErrorAction SilentlyContinue
+    if ($conn) { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 800
+}
+
+if ($Restart) {
+    Write-Host "Restarting ORAC: stopping any running instance..."
+    Stop-Orac
+} elseif (Test-OracServer) {
+    # Already up and we were not asked to restart: just bring the desk forward.
     Start-Process $Url
     exit 0
 }

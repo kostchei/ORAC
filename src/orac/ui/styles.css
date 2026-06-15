@@ -993,3 +993,45 @@ label {
     justify-content: flex-start;
   }
 }
+
+.services-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.service-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.service-name {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.service-name strong {
+  font-family: var(--serif);
+  font-size: 15px;
+}
+
+.service-state {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--stone);
+  overflow-wrap: anywhere;
+}
+
+.service-state.svc-on {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.service-actions {
+  display: flex;
+  gap: 8px;
+}
