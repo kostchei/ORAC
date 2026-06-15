@@ -14,10 +14,11 @@ before ORAC widens beyond the code-writing bootstrap.
   review-after `git.push` notification, and standing-grant daily-cap fallback
   to pending approval. Covered by `tests/test_governance_validation_script.py`.
 
-- [ ] **Document the council contract.** Give the council, Sentinel, fair-share
-  band, churn lens, duplicate-write lens, and verdict aggregation their own
-  operator-facing contract: what each lens checks, what `pass` / `escalate` /
-  `block` mean, and which outcomes park, deny, notify, or pass.
+- [x] **Document the council contract.** [docs/council-contract.md](docs/council-contract.md)
+  is the operator-facing spec: every lens (Intent, Optimise, Simple, Efficiency,
+  Sentinel) and the LLM cognition layer, what each checks, what `pass` / `escalate`
+  / `block` mean, the veto-not-vote aggregation, and the full broker pipeline
+  mapping each outcome to deny / park / notify / pass under review-after.
 
 ## Rollback and External Actions
 
