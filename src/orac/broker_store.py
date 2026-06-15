@@ -92,7 +92,6 @@ CREATE TABLE IF NOT EXISTS subagents (
     profile_slug   TEXT NOT NULL,
     instruction    TEXT NOT NULL,
     intent         TEXT NOT NULL,
-    resource_slice REAL NOT NULL DEFAULT 0,
     status         TEXT NOT NULL DEFAULT 'active',
     resolved_at    TEXT
 );
@@ -141,7 +140,7 @@ class Subagent:
 
     Distinct from a static agent *profile* (`agent_registry`): a profile is a
     role definition; a Subagent is a live instance doing one decomposed slice of
-    work, with its own instruction, intent slice, and reserved resource share.
+    work, with its own instruction and intent slice.
     """
 
     id: int
@@ -150,7 +149,6 @@ class Subagent:
     profile_slug: str
     instruction: str
     intent: str
-    resource_slice: float
     status: str
     resolved_at: str | None
 
@@ -674,15 +672,6 @@ class BrokerStore:
         """Slots left on the roster — the honest number behind the frame."""
         return max(0, cap - self.subagent_roster_count())
 
-    def active_slice_total(self) -> float:
-        """Sum of reserved resource slices across active subagents (band usage)."""
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(resource_slice), 0) FROM subagents "
-                "WHERE status = 'active'"
-            ).fetchone()
-        return float(row[0])
-
     def reap_stale_subagents(
         self,
         *,
@@ -711,7 +700,6 @@ class BrokerStore:
         profile_slug: str,
         instruction: str,
         intent: str,
-        resource_slice: float = 0.0,
         cap: int = MAX_SUBAGENTS,
     ) -> int:
         """Admit a subagent to the roster, enforcing the cap. Raises if full.
@@ -729,8 +717,8 @@ class BrokerStore:
             cursor = conn.execute(
                 "INSERT INTO subagents "
                 "(created_at, parent_task_id, profile_slug, instruction, intent, "
-                "resource_slice, status) VALUES (?, ?, ?, ?, ?, ?, 'active')",
-                (now_iso(), parent_task_id, profile_slug, instruction, intent, resource_slice),
+                "status) VALUES (?, ?, ?, ?, ?, 'active')",
+                (now_iso(), parent_task_id, profile_slug, instruction, intent),
             )
             return int(cursor.lastrowid)
 
@@ -765,7 +753,6 @@ class BrokerStore:
             profile_slug=row["profile_slug"],
             instruction=row["instruction"],
             intent=row["intent"],
-            resource_slice=float(row["resource_slice"]),
             status=row["status"],
             resolved_at=row["resolved_at"],
         )

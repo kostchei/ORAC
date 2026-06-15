@@ -119,9 +119,10 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
 }
 
 
-# A subagent's default share of the 60% resource band. 0.25 => up to four run
-# concurrently before the band is full. Optimise's allocator may pass a tuned
-# slice; this is the standing default.
+# The per-slice cost unit used only by the decomposition *score* telemetry
+# (`score_decomposition` -> "est cost N"). It is no longer a dispatch throttle:
+# subagent fan-out is admitted by the roster cap alone (see dispatch.py). Kept as
+# a stable unit so the operator-facing cost estimate stays comparable across plans.
 DEFAULT_RESOURCE_SLICE = 0.25
 
 
@@ -136,7 +137,6 @@ def run_goal_task(
     context: dict[str, Any],
     max_steps: int = 16,
     intent: str | None = None,
-    resource_slice: float = DEFAULT_RESOURCE_SLICE,
     contract_metadata: dict[str, Any] | None = None,
     max_repairs: int = 0,
     review_return: bool = False,
@@ -214,8 +214,8 @@ def run_goal_task(
         done_means=spec.done_means,
     )
 
-    # Admit the doer to the roster (the register), reserving its resource slice.
-    # Recorded so the live free-count behind the Orchestrator's frame is honest.
+    # Admit the doer to the roster (the register). Recorded so the live free-count
+    # behind the Orchestrator's abundance frame is honest.
     subagent_id: int | None = None
     if broker.store is not None:
         subagent_id = broker.store.admit_subagent(
@@ -223,7 +223,6 @@ def run_goal_task(
             profile_slug=spec.doer_slug,
             instruction=contract,
             intent=intent or goal,
-            resource_slice=resource_slice,
         )
 
     def _retire(status: str) -> None:
@@ -309,7 +308,6 @@ def run_goal_task(
                 context={**context, "verification_failure": detail},
                 max_steps=max_steps,
                 intent=f"repair: {intent or goal}",
-                resource_slice=resource_slice,
                 contract_metadata=contract_metadata,
                 max_repairs=max_repairs - 1,
                 review_return=review_return,
@@ -376,8 +374,6 @@ def run_decomposed_goal(
     context: dict[str, Any],
     max_steps: int = 16,
     cap: int = MAX_SUBAGENTS,
-    resource_slice: float = DEFAULT_RESOURCE_SLICE,
-    band: float | None = None,
     max_repairs: int = 0,
     review_return: bool = False,
     plan_brain: Brain | None = None,
@@ -409,8 +405,6 @@ def run_decomposed_goal(
             decision = both_agree(
                 broker.store,
                 orchestrator_proposed=True,
-                resource_slice=resource_slice,
-                band=band,
                 cap=cap,
             )
             if not decision.agreed:
@@ -466,7 +460,6 @@ def run_decomposed_goal(
                 context=slice_context,
                 max_steps=max_steps,
                 cap=cap,
-                band=band,
                 max_repairs=max_repairs,
                 child_brain=brain,
                 depth=depth + 1,
@@ -484,7 +477,6 @@ def run_decomposed_goal(
                 context=slice_context,
                 max_steps=max_steps,
                 intent=slice_["sub_intent"],
-                resource_slice=resource_slice,
                 contract_metadata=contract_metadata or None,
                 max_repairs=max_repairs,
                 review_return=review_return,
@@ -513,7 +505,6 @@ def run_orchestrated_goal(
     context: dict[str, Any],
     max_steps: int = 16,
     cap: int = MAX_SUBAGENTS,
-    band: float | None = None,
     max_repairs: int = 2,
     child_brain: Brain | None = None,
     depth: int = 0,
@@ -611,7 +602,7 @@ def run_orchestrated_goal(
     # judge that what came back is on-goal and waste-free before it integrates.
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
-        max_steps=max_steps, cap=cap, band=band, max_repairs=max_repairs, review_return=True,
+        max_steps=max_steps, cap=cap, max_repairs=max_repairs, review_return=True,
         plan_brain=brain, depth=depth, max_depth=max_depth,
     )
 

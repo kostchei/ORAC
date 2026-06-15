@@ -53,7 +53,7 @@ def test_frame_uses_the_live_free_count(tmp_path) -> None:
     store = _store(tmp_path)
     # fill some of the roster so the free count is below the cap
     for _ in range(3):
-        store.admit_subagent("p", "builder", "instr", "intent", 0.1)
+        store.admit_subagent("p", "builder", "instr", "intent")
     brain = ScriptedBrain([_plan("a")])
 
     propose_decomposition("g", "i", store, brain)
@@ -64,7 +64,7 @@ def test_frame_uses_the_live_free_count(tmp_path) -> None:
 
 def test_frame_self_tightens_to_zero_when_roster_full(tmp_path) -> None:
     store = _store(tmp_path)
-    store.admit_subagent("p", "builder", "instr", "intent", 0.1, cap=1)
+    store.admit_subagent("p", "builder", "instr", "intent", cap=1)
     brain = ScriptedBrain([_plan("a")])
 
     # roster full -> 0 free -> even a single-slice plan exceeds the budget

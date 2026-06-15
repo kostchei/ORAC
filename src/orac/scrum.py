@@ -197,6 +197,16 @@ class Scrum:
     def _resume_decomposed_goal(self, board: Board, task: Task) -> bool:
         if self.broker is None or self.root is None or task.work_kind is None:
             return False
+        # Resume re-enters the ledger that already exists; it passes an empty
+        # decomposition because run_decomposed_goal only opens a ledger when none
+        # is present. Assert that invariant here so a drift in the upstream guard
+        # surfaces loudly instead of silently opening an empty ledger and settling
+        # the goal as a no-op (an unsatisfiable parent reported as done).
+        assert has_ledger(task), (
+            "resume requires an existing intent ledger; run_decomposed_goal would "
+            "otherwise open an empty one from the [] decomposition and mark the goal "
+            "covered with no slices"
+        )
         from orac.work import run_decomposed_goal
 
         before_logs = len(task.work_log)

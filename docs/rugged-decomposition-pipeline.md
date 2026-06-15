@@ -88,8 +88,15 @@ Two gates, cheapest first:
 
 A slice dispatches only when **both** agree (`dispatch.both_agree`): the
 Orchestrator proposed it (approved plan) **and** Optimise admits it (a free roster
-slot and room in the resource band). A refused spawn defers the slice; it is not an
+slot, bounded by `MAX_SUBAGENTS`). A refused spawn defers the slice; it is not an
 error.
+
+> Optimise's dispatch half is a binary roster check, not a utilisation throttle.
+> An earlier design also gated on a resource *band* (sum of per-slice `0.25`
+> shares ≤ a ceiling), which conflated council resource-governance with worker
+> fan-out and deadlocked when a long-running doer pinned the band; it was removed.
+> The 60%-utilisation governor lives where it belongs — model/resource routing in
+> `model_policy.py` + `resources.py` — not in subagent admission.
 
 ### 4.5–4.8 Execute → Verify → Return → Integrate
 

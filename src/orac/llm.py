@@ -265,7 +265,12 @@ def _should_not_fallback(exc: RuntimeError) -> bool:
     to the next one. Falling back to local here hides the outage and defeats the
     browser-foundation planning contract.
     """
-    return exc.__class__.__name__ == "ProviderRateLimited" and hasattr(exc, "provider")
+    # Lazy import to match build_brain's browser_brain import and avoid pulling
+    # the browser stack in at module load; browser_brain does not import llm, so
+    # there is no cycle.
+    from orac.browser_brain import ProviderRateLimited  # noqa: PLC0415
+
+    return isinstance(exc, ProviderRateLimited)
 
 
 def build_brain(name: str, model: str | None = None) -> Brain:

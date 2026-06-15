@@ -23,13 +23,10 @@ class DispatchDecision:
 
 def optimise_admits(
     store: BrokerStore,
-    resource_slice: float,
     *,
-    band: float | None = None,
     cap: int = MAX_SUBAGENTS,
 ) -> DispatchDecision:
-    """Optimise's half: is there a roster slot for this slice?"""
-    del resource_slice, band
+    """Optimise's half: is there a free roster slot for another subagent?"""
     store.reap_stale_subagents()
     if store.subagent_free_slots(cap) <= 0:
         return DispatchDecision(False, f"roster full ({cap}); no free slot")
@@ -39,12 +36,10 @@ def optimise_admits(
 def both_agree(
     store: BrokerStore,
     orchestrator_proposed: bool,
-    resource_slice: float,
     *,
-    band: float | None = None,
     cap: int = MAX_SUBAGENTS,
 ) -> DispatchDecision:
     """The spawn fires only if Orchestrator proposed it and Optimise admits it."""
     if not orchestrator_proposed:
         return DispatchDecision(False, "Orchestrator did not propose this spawn")
-    return optimise_admits(store, resource_slice, band=band, cap=cap)
+    return optimise_admits(store, cap=cap)

@@ -104,7 +104,9 @@ def tick_payload(store: BoardStore, cycles: int = 1) -> dict[str, object]:
 def _record_browser_provider_cooldown(
     policy_store: ModelPolicyStore, exc: Exception
 ) -> None:
-    if exc.__class__.__name__ != "ProviderRateLimited":
+    from orac.browser_brain import ProviderRateLimited  # noqa: PLC0415
+
+    if not isinstance(exc, ProviderRateLimited):
         return
     provider = getattr(exc, "provider", "")
     if not provider:

@@ -35,14 +35,14 @@ def _repo(tmp_path):
 
 def test_no_spawn_without_orchestrator_proposal(tmp_path) -> None:
     store = _store(tmp_path)
-    decision = both_agree(store, orchestrator_proposed=False, resource_slice=0.25)
+    decision = both_agree(store, orchestrator_proposed=False)
     assert not decision.agreed
     assert "did not propose" in decision.reason
 
 
 def test_both_agree_when_roster_slot_available(tmp_path) -> None:
     store = _store(tmp_path)
-    decision = both_agree(store, orchestrator_proposed=True, resource_slice=0.25)
+    decision = both_agree(store, orchestrator_proposed=True)
     assert decision.agreed
 
 
@@ -50,15 +50,15 @@ def test_optimise_does_not_cap_workers_at_four(tmp_path) -> None:
     store = _store(tmp_path)
     # Four active subagents are just four workers, not a full worker pool.
     for _ in range(4):
-        store.admit_subagent("p", "builder", "i", "intent", 0.25)
-    decision = optimise_admits(store, 0.25)
+        store.admit_subagent("p", "builder", "i", "intent")
+    decision = optimise_admits(store)
     assert decision.agreed
 
 
 def test_optimise_refuses_when_roster_full(tmp_path) -> None:
     store = _store(tmp_path)
-    store.admit_subagent("p", "builder", "i", "intent", 0.1, cap=1)
-    decision = optimise_admits(store, 0.1, cap=1)
+    store.admit_subagent("p", "builder", "i", "intent", cap=1)
+    decision = optimise_admits(store, cap=1)
     assert not decision.agreed
     assert "roster full" in decision.reason
 
@@ -68,7 +68,7 @@ def test_optimise_refuses_when_roster_full(tmp_path) -> None:
 
 def test_decomposed_goal_defers_slice_when_roster_is_full(tmp_path) -> None:
     broker, store = _repo(tmp_path)
-    store.admit_subagent("other", "builder", "i", "intent", 0.25, cap=1)
+    store.admit_subagent("other", "builder", "i", "intent", cap=1)
     board = Board()
     parent = Task(title="needs room", status=TaskStatus.IN_PROGRESS)
     board.add_task(parent)
@@ -94,7 +94,7 @@ def test_decomposed_goal_defers_slice_when_roster_is_full(tmp_path) -> None:
     assert any("deferred" in e.message for e in parent.work_log)
 
 
-def test_subagent_crash_retires_resource_reservation(tmp_path) -> None:
+def test_subagent_crash_retires_roster_slot(tmp_path) -> None:
     broker, store = _repo(tmp_path)
     board = Board()
     parent = Task(title="crashy", status=TaskStatus.IN_PROGRESS)
@@ -113,7 +113,6 @@ def test_subagent_crash_retires_resource_reservation(tmp_path) -> None:
 
     assert len(children) == 1
     assert children[0].status is TaskStatus.BLOCKED
-    assert store.active_slice_total() == 0
     assert store.subagent_roster_count() == 0
     assert any("subagent crashed" in entry.message for entry in parent.work_log)
 
