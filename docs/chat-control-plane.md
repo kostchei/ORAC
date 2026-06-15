@@ -99,13 +99,21 @@ already anticipates.
 
 ## 6. Build order (push first, then control — both ship in v1)
 
-0. **Secrets + config + allowlist** — mini credential store; `chat` block in
+0. **Secrets + config + allowlist** — mini credential store (DPAPI / Windows
+   Credential Manager, opaque `credential_ref`, log redaction); `chat` block in
    `config.json` (channels, authorized senders, enable flags). Prereq.
+   - **Local sign-on box** — a local ORAC surface to *connect* each channel and
+     write its secret into the store: **Slack** = paste/authorize bot + app tokens,
+     validated against `auth.test`; **WhatsApp** = render the bridge's pairing **QR
+     code** to scan once, then persist the session. The same "pop the login locally,
+     sign in once, reconnect after" shape ORAC already uses for the browser
+     foundation. Secrets land in the credential store; only `credential_ref`s touch
+     config/logs.
 1. **Outbound push** — notify queue → Slack + WhatsApp. Read-only + alerts.
 2. **Inbound control** — the grammar → broker/CLI ops, with auth + echo-confirm +
    rate limit.
 3. **Connectors** — Slack Bolt (Socket Mode) live; the Node WhatsApp bridge
-   sidecar live (one-time QR login of the number).
+   sidecar live (the sign-on box drives its one-time QR pairing).
 
 ## 7. Dependencies & risks
 
