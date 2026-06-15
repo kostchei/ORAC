@@ -30,11 +30,14 @@ before ORAC widens beyond the code-writing bootstrap.
 
 ## Budgeting
 
-- [ ] **Replace estimated foundation spend with measured usage.** The current
-  `$0.05` per productive cycle estimate is a placeholder. Record actual API
-  token/cost usage from response metadata where available, keep browser-provider
-  usage separate, and make routing decisions from measured spend instead of the
-  estimate when possible.
+- [x] **Replace estimated foundation spend with measured usage.** Foundation
+  spend is now recorded from real API token usage: `llm.record_llm_usage` (called
+  in every OpenAI-compatible `_complete`, the central seam all rotating brain
+  instances share) prices `usage` against `FOUNDATION_PRICING_USD_PER_MTOK`;
+  `drain_foundation_spend_usd` is drained by the daemon/UI/scrum tick in place of
+  the flat `$0.05`. Browser foundation never hits the API path, so it accrues
+  nothing (free); local models are unpriced and accrue nothing. `can_escalate`'s
+  daily-cap gate now reads measured spend. The estimate key is legacy.
 
 ## Optional Surfaces
 

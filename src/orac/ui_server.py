@@ -14,7 +14,7 @@ from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
 from orac.broker_store import BrokerStore
 from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
 from orac.dependency_installer import install_audio_stack
-from orac.llm import build_brain
+from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
     ModelPolicyStore,
     ensure_lmstudio_model_loaded,
@@ -114,8 +114,9 @@ class UIRuntime:
                     route_models=True,
                 ).run(board, cycles=int(policy["daemon_cycles"]))
                 self.store.save(board)
-                if decision.brain == "foundation" and result.touched_tasks:
-                    policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
+                spent = drain_foundation_spend_usd()
+                if spent > 0:
+                    policy_store.record_foundation_spend(spent)
                 self.record_tick(result, decision)
                 interval = int(policy["daemon_interval_seconds"])
             except Exception as exc:
@@ -193,8 +194,9 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                     build_brain(decision.brain, model=decision.model), root=store.root
                 ).run(board, cycles=cycles)
                 store.save(board)
-                if decision.brain == "foundation" and result.touched_tasks:
-                    policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
+                spent = drain_foundation_spend_usd()
+                if spent > 0:
+                    policy_store.record_foundation_spend(spent)
                 runtime.record_tick(result, decision)
                 self._send_json({"result": asdict(result), "model_decision": decision.to_dict()})
                 return

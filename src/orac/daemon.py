@@ -6,7 +6,7 @@ from pathlib import Path
 
 from orac.broker_store import BrokerStore
 from orac.browser_brain import ensure_browser_foundation_ready
-from orac.llm import build_brain
+from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.notify import review_queue_summary
 from orac.model_policy import (
     ModelPolicyStore,
@@ -77,8 +77,11 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
         llm_lenses=True,
     ).run(board, cycles=cycles)
     store.save(board)
-    if decision.brain == "foundation" and result.touched_tasks:
-        policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
+    # Record MEASURED foundation spend (from real API token usage), not a flat
+    # estimate. Drains 0 when the tick used only local/browser brains (both free).
+    spent = drain_foundation_spend_usd()
+    if spent > 0:
+        policy_store.record_foundation_spend(spent)
     return DaemonTick(
         cycles=result.cycles,
         touched_tasks=result.touched_tasks,

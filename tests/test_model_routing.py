@@ -205,6 +205,27 @@ def test_can_escalate_requires_key_and_budget(tmp_path, monkeypatch) -> None:
     assert can_escalate(policy_store) is False
 
 
+def test_measured_foundation_spend_prices_only_known_models() -> None:
+    from orac.llm import (
+        drain_foundation_spend_usd,
+        record_llm_usage,
+        FOUNDATION_PRICING_USD_PER_MTOK,
+    )
+
+    drain_foundation_spend_usd()  # reset any prior accrual
+    # A local model (not in the pricing table) is free — accrues nothing.
+    record_llm_usage("qwen3-coder-next", 1_000_000, 1_000_000)
+    assert drain_foundation_spend_usd() == 0.0
+
+    # A priced foundation model accrues input*price_in + output*price_out.
+    price_in, price_out = FOUNDATION_PRICING_USD_PER_MTOK["gpt-4.1-mini"]
+    record_llm_usage("gpt-4.1-mini", 1_000_000, 500_000)
+    expected = round(price_in + 0.5 * price_out, 6)
+    assert drain_foundation_spend_usd() == expected
+    # Drain reset the ledger.
+    assert drain_foundation_spend_usd() == 0.0
+
+
 def test_session_brain_for_routes_by_kind_and_escalation(tmp_path) -> None:
     store = BoardStore(tmp_path)
     store.init()

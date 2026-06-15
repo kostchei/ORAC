@@ -16,7 +16,7 @@ from orac.agent_registry import (
 )
 from orac.intent_backbone import SPEC, IntentBackbone, IntentField
 from orac.intent_gate import IntentGate
-from orac.llm import build_brain
+from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
     ModelPolicyStore,
     lmstudio_models,
@@ -791,8 +791,9 @@ def cmd_scrum_run(store: BoardStore, args: argparse.Namespace) -> int:
     scrum = Scrum(build_brain(brain_name, model=model), root=store.root, llm_lenses=args.lenses)
     result = scrum.run(board, cycles=args.cycles)
     store.save(board)
-    if decision and decision.brain == "foundation" and result.touched_tasks:
-        policy_store.record_foundation_spend(policy_store.estimated_cycle_spend())
+    spent = drain_foundation_spend_usd()
+    if spent > 0:
+        policy_store.record_foundation_spend(spent)
     print(
         f"Ran {result.cycles} cycle(s); touched {result.touched_tasks} task(s); "
         f"{result.done_tasks} task(s) done."

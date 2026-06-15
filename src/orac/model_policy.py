@@ -19,6 +19,8 @@ DEFAULT_POLICY = {
     "monthly_foundation_budget_usd": 20.0,
     "daily_foundation_budget_usd": 0.75,
     "foundation_daily_fraction": 0.60,
+    # Legacy hint only. Spend is now recorded from MEASURED API token usage
+    # (llm.record_llm_usage / drain_foundation_spend_usd), not this estimate.
     "estimated_foundation_cycle_usd": 0.05,
     "target_local_resource_percent": 60.0,
     "lmstudio_url": "http://localhost:1234/v1",
@@ -155,9 +157,6 @@ class ModelPolicyStore:
     def spent_today(self) -> float:
         usage = self.usage()
         return round(float(usage.get("foundation", {}).get(_today_key(), 0.0)), 4)
-
-    def estimated_cycle_spend(self) -> float:
-        return round(float(self.load_policy()["estimated_foundation_cycle_usd"]), 4)
 
 
 def model_for_work_kind(policy: dict[str, Any], work_kind: str | None) -> str:

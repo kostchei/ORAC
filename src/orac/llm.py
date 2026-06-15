@@ -10,6 +10,50 @@ from urllib.request import Request, urlopen
 from orac.models import Task
 
 
+# Measured foundation spend (TODO: replace the $0.05/cycle estimate). Only models
+# listed here accrue cost; anything else — every local LM Studio model — is free
+# and accrues nothing, so local volume never touches the budget. Prices are USD
+# per 1M tokens (input, output), approximate published rates mid-2026; keep current
+# when adding a foundation model. An unlisted FOUNDATION model accrues 0 (a visible
+# under-count to fix by adding it here, never a silent overcharge of local work).
+FOUNDATION_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+}
+
+_measured_foundation_spend_usd = 0.0
+
+
+def record_llm_usage(model: str, prompt_tokens: int, completion_tokens: int) -> None:
+    """Accrue measured foundation spend from one API response's token usage.
+
+    Central seam (every OpenAI-compatible call lands here regardless of which
+    rotating brain instance made it), so spend is captured even though foundation
+    work now happens across on-demand planning/escalation brains. Browser
+    foundation never reaches this path (it's not an API call) — it's free.
+    """
+    price = FOUNDATION_PRICING_USD_PER_MTOK.get(model)
+    if not price or not (prompt_tokens or completion_tokens):
+        return
+    global _measured_foundation_spend_usd
+    cost = prompt_tokens / 1_000_000 * price[0] + completion_tokens / 1_000_000 * price[1]
+    _measured_foundation_spend_usd = round(_measured_foundation_spend_usd + cost, 6)
+
+
+def drain_foundation_spend_usd() -> float:
+    """Return measured foundation spend accrued since the last drain, then reset.
+
+    The daemon / UI tick / scrum-run drains this after each run and records it in
+    place of the old flat estimate — measured usage, not a placeholder. A tick with
+    only local/browser work drains 0 (both are free)."""
+    global _measured_foundation_spend_usd
+    spent = _measured_foundation_spend_usd
+    _measured_foundation_spend_usd = 0.0
+    return spent
+
+
 class Brain(Protocol):
     def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
         ...
@@ -128,6 +172,12 @@ class OpenAICompatibleBrain:
                 data = json.loads(response.read().decode("utf-8"))
         except (OSError, URLError, TimeoutError) as exc:
             raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
+        usage = data.get("usage") or {}
+        record_llm_usage(
+            self.model,
+            int(usage.get("prompt_tokens", 0) or 0),
+            int(usage.get("completion_tokens", 0) or 0),
+        )
         choices = data.get("choices", [])
         if not choices:
             return ""
