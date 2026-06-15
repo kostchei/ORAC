@@ -222,6 +222,25 @@ def make_parser() -> argparse.ArgumentParser:
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8765)
 
+    chat = subparsers.add_parser("chat", help="Chat control plane (WhatsApp/Slack) sign-on.")
+    chat_sub = chat.add_subparsers(dest="chat_command", required=True)
+    chat_sub.add_parser("status", help="Show channel connection + allowlist state.")
+    c_slack = chat_sub.add_parser("connect-slack", help="Store Slack tokens and enable the channel.")
+    c_slack.add_argument("--bot-token", required=True, help="Slack bot token (xoxb-…).")
+    c_slack.add_argument("--app-token", required=True, help="Slack app-level token (xapp-…, Socket Mode).")
+    chat_sub.add_parser(
+        "connect-whatsapp",
+        help="Begin WhatsApp pairing (QR via the local bridge; see chat-control-plane.md).",
+    )
+    c_allow = chat_sub.add_parser("allow", help="Add a sender to a channel's allowlist.")
+    c_allow.add_argument("channel", choices=["slack", "whatsapp"])
+    c_allow.add_argument("sender", help="Slack user id (U…) or E.164 phone number.")
+    c_disallow = chat_sub.add_parser("disallow", help="Remove a sender from a channel's allowlist.")
+    c_disallow.add_argument("channel", choices=["slack", "whatsapp"])
+    c_disallow.add_argument("sender")
+    c_disc = chat_sub.add_parser("disconnect", help="Disable a channel and delete its stored secrets.")
+    c_disc.add_argument("channel", choices=["slack", "whatsapp"])
+
     browser = subparsers.add_parser("browser", help="Browser-foundation operations.")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
     doctor = browser_sub.add_parser(
@@ -776,6 +795,82 @@ def cmd_lmstudio_start(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_chat(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.chat_config import CHANNELS, load_chat_config, save_chat_config
+    from orac.credentials import CredentialStore
+
+    creds = CredentialStore(store.root)
+    cfg = load_chat_config(store)
+    cmd = args.chat_command
+
+    if cmd == "status":
+        print(f"Chat control plane: {'ENABLED' if cfg['enabled'] else 'disabled'}")
+        for channel in CHANNELS:
+            spec = cfg["channels"][channel]
+            ref_keys = [k for k in spec if k.endswith("_ref")]
+            have = [k for k in ref_keys if creds.has(str(spec[k]))]
+            senders = spec.get("authorized_senders", [])
+            print(
+                f"  {channel:9}: {'on' if spec.get('enabled') else 'off'}; "
+                f"secrets {len(have)}/{len(ref_keys)} stored; "
+                f"{len(senders)} allowed sender(s){': ' + ', '.join(senders) if senders else ''}"
+            )
+        return 0
+
+    if cmd == "connect-slack":
+        spec = cfg["channels"]["slack"]
+        creds.set(str(spec["bot_token_ref"]), args.bot_token)
+        creds.set(str(spec["app_token_ref"]), args.app_token)
+        spec["enabled"] = True
+        cfg["enabled"] = True
+        save_chat_config(store, cfg)
+        print(
+            "Slack tokens stored (sealed) and channel enabled. Live validation runs "
+            "when the Socket Mode connector lands (Phase 3). Add yourself: "
+            "`orac chat allow slack <your-user-id>`."
+        )
+        return 0
+
+    if cmd == "connect-whatsapp":
+        spec = cfg["channels"]["whatsapp"]
+        print(
+            "WhatsApp pairing needs the local Node bridge (Baileys), which is Phase 3 "
+            f"of the chat control plane. Once it runs at {spec['bridge_url']}, this "
+            "command will render its QR code to scan; the session then seals to "
+            f"{spec['session_ref']!r}. See docs/chat-control-plane.md."
+        )
+        return 0
+
+    if cmd == "allow":
+        spec = cfg["channels"][args.channel]
+        senders = list(spec.get("authorized_senders", []))
+        if args.sender not in senders:
+            senders.append(args.sender)
+        spec["authorized_senders"] = senders
+        save_chat_config(store, cfg)
+        print(f"Allowed {args.sender!r} on {args.channel}. Allowlist: {senders}")
+        return 0
+
+    if cmd == "disallow":
+        spec = cfg["channels"][args.channel]
+        senders = [s for s in spec.get("authorized_senders", []) if s != args.sender]
+        spec["authorized_senders"] = senders
+        save_chat_config(store, cfg)
+        print(f"Removed {args.sender!r} from {args.channel}. Allowlist: {senders}")
+        return 0
+
+    if cmd == "disconnect":
+        spec = cfg["channels"][args.channel]
+        for key in [k for k in spec if k.endswith("_ref")]:
+            creds.delete(str(spec[key]))
+        spec["enabled"] = False
+        save_chat_config(store, cfg)
+        print(f"Disconnected {args.channel}: channel disabled and stored secrets deleted.")
+        return 0
+
+    raise ValueError(f"Unknown chat command {cmd!r}.")
+
+
 def cmd_browser_doctor(args: argparse.Namespace) -> int:
     from orac.browser_brain import browser_doctor, format_doctor_report
     from orac.browser_selectors import load_provider_selectors
@@ -926,6 +1021,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ui":
         run_ui(root=Path(args.root), host=args.host, port=args.port)
         return 0
+    if args.command == "chat":
+        return cmd_chat(store, args)
     if args.command == "browser" and args.browser_command == "doctor":
         return cmd_browser_doctor(args)
     if args.command == "daemon" and args.daemon_command == "run":
