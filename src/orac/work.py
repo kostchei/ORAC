@@ -227,46 +227,67 @@ def run_goal_task(
         if broker.store is not None and subagent_id is not None:
             broker.store.set_subagent_status(subagent_id, status)
 
-    current_contract = contract
-    repairs = 0
     session = AgentSession(profile=doer, brain=brain, broker=broker, max_steps=max_steps)
+    result = session.run(child, contract)
 
-    while True:
-        result = session.run(child, current_contract)
-
-        if result.status == "done":
-            # Generation is cheap, verification is scarce: the doer's self-reported
-            # "done" is a claim, not proof. Independently confirm the kind's
-            # done-means before granting DONE; a failed or unrunnable check blocks
-            # the task rather than trusting the summary (most likely live-fire
-            # failure: a local model declaring victory with red or unrun tests).
-            ok, detail = verify_goal_done(spec, child, broker, context)
-            if ok:
+    if result.status == "done":
+        # Generation is cheap, verification is scarce: the doer's self-reported
+        # "done" is a claim, not proof. Independently confirm the kind's done-means
+        # before granting DONE; a failed or unrunnable check does not trust the
+        # summary (most likely live-fire failure: a local model declaring victory
+        # with red or unrun tests).
+        ok, detail = verify_goal_done(spec, child, broker, context)
+        if ok:
+            child.transition(TaskStatus.DONE)
+            _retire("done")
+            parent.add_log(
+                "Orchestrator",
+                f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
+            )
+        elif max_repairs > 0:
+            # Repair is a NEW focused slice (rugged decomposition §13): a child of
+            # this one, visible on the board and independently verified in its own
+            # right — not an invisible in-place re-run. It carries the exact failure
+            # and inherits this slice's scope; a repair that itself fails verification
+            # chains one more bounded repair (max_repairs - 1) before giving up.
+            child.add_log(
+                doer.name,
+                f"Claimed done, but verification failed: {detail}. "
+                f"Spawning a repair slice (repair budget {max_repairs}).",
+            )
+            repair = run_goal_task(
+                board,
+                child,
+                goal=_repair_goal(goal, detail),
+                acceptance_criteria=acceptance_criteria,
+                work_kind=work_kind,
+                brain=brain,
+                broker=broker,
+                context={**context, "verification_failure": detail},
+                max_steps=max_steps,
+                intent=f"repair: {intent or goal}",
+                resource_slice=resource_slice,
+                contract_metadata=contract_metadata,
+                max_repairs=max_repairs - 1,
+            )
+            if repair.status is TaskStatus.DONE:
+                # The repair verified, so this slice's goal is now met on the branch.
                 child.transition(TaskStatus.DONE)
                 _retire("done")
                 parent.add_log(
                     "Orchestrator",
-                    f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
+                    f"{spec.kind} subtask {child.id} done via repair slice {repair.id}.",
                 )
-                break
-            if repairs < max_repairs:
-                # Bounded repair, not a broad retry: re-run the doer in a fresh
-                # session with the exact failure injected and a "fix only this"
-                # rule, so it corrects the named defect rather than redoing the
-                # slice (rugged decomposition §4.5–4.8).
-                repairs += 1
-                child.add_log(
-                    doer.name,
-                    f"Claimed done, but verification failed: {detail}. "
-                    f"Repair attempt {repairs}/{max_repairs}.",
+            else:
+                child.transition(TaskStatus.BLOCKED)
+                _retire("blocked")
+                parent.transition(TaskStatus.BLOCKED)
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} blocked: repair slice "
+                    f"{repair.id} did not verify ({detail}).",
                 )
-                current_contract = _repair_contract(
-                    spec, child, goal, acceptance_criteria, context, detail
-                )
-                session = AgentSession(
-                    profile=doer, brain=brain, broker=broker, max_steps=max_steps
-                )
-                continue
+        else:
             child.add_log(doer.name, f"Claimed done, but verification failed: {detail}")
             child.transition(TaskStatus.BLOCKED)
             _retire("blocked")
@@ -276,41 +297,27 @@ def run_goal_task(
                 f"{spec.kind} subtask {child.id} blocked: claimed done but "
                 f"verification failed: {detail}",
             )
-            break
-        if result.status == "pending":
-            # Parked for approval: still live (holds its roster slot) until resolved.
-            child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
-            parent.add_log(
-                "Orchestrator",
-                f"{spec.kind} subtask {child.id} parked for approval (pending {result.pending_id}).",
-            )
-            break
+    elif result.status == "pending":
+        # Parked for approval: still live (holds its roster slot) until resolved.
+        child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)
+        parent.add_log(
+            "Orchestrator",
+            f"{spec.kind} subtask {child.id} parked for approval (pending {result.pending_id}).",
+        )
+    else:
         child.transition(TaskStatus.BLOCKED)
         _retire("blocked")
         parent.transition(TaskStatus.BLOCKED)
         parent.add_log("Orchestrator", f"{spec.kind} subtask {child.id} blocked: {result.summary}")
-        break
     return child
 
 
-def _repair_contract(
-    spec: WorkKindSpec,
-    child: Task,
-    goal: str,
-    acceptance_criteria: tuple[str, ...],
-    context: dict[str, Any],
-    detail: str,
-) -> str:
-    """The contract for a repair attempt: the original plus the named failure."""
-    return CONTRACT_TEMPLATE.format(
-        goal=goal,
-        criteria="\n".join(f"- {c}" for c in acceptance_criteria) or "- (none given)",
-        context="\n".join(f"- {k}: {v}" for k, v in context.items())
-        + f"\n- VERIFICATION FAILURE: {detail}",
-        rules=spec.contract_rules.format(task_id=child.id)
-        + "\n- Fix exactly this verification failure; keep your other changes and "
-        "make no unrelated edits.",
-        done_means=spec.done_means,
+def _repair_goal(goal: str, detail: str) -> str:
+    """The focused goal for a repair slice: the original goal plus the exact
+    verification failure to fix, with an explicit 'no unrelated edits' bound."""
+    return (
+        f"{goal}\n\nA prior attempt failed verification. Fix EXACTLY this failure "
+        f"and make no unrelated edits:\n{detail}"
     )
 
 

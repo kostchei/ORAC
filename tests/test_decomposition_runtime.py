@@ -134,7 +134,7 @@ class _MockSession:
         return _MockResult(status="done", summary="claimed done")
 
 
-def test_repair_loop_retries_with_failure_injected(tmp_path, monkeypatch) -> None:
+def test_repair_is_a_new_verified_slice(tmp_path, monkeypatch) -> None:
     (tmp_path / ".orac").mkdir()
     broker = ToolBroker.from_store(BrokerStore(tmp_path).init())
     board = Board()
@@ -161,11 +161,18 @@ def test_repair_loop_retries_with_failure_injected(tmp_path, monkeypatch) -> Non
         context={"repo_root": str(tmp_path)}, max_repairs=2,
     )
 
-    assert child.status is TaskStatus.DONE          # repaired on the 2nd pass
-    assert len(session.contracts) == 2              # ran twice
-    assert "VERIFICATION FAILURE" not in session.contracts[0]
-    assert "VERIFICATION FAILURE: pytest" in session.contracts[1]  # detail injected
-    assert any("Repair attempt 1/2" in log.message for log in child.work_log)
+    # The slice is satisfied — via a repair, not an in-place re-run.
+    assert child.status is TaskStatus.DONE
+    assert len(session.contracts) == 2                       # original + repair
+    assert "verification_failure" not in session.contracts[0].lower()
+    assert "pytest: 1 failed at line 5" in session.contracts[1]  # failure carried in
+
+    # The repair is a NEW slice on the board: a child of the failed slice, itself
+    # independently verified (not an invisible loop iteration).
+    repair_children = [t for t in board.tasks if t.parent_id == child.id]
+    assert len(repair_children) == 1
+    assert repair_children[0].status is TaskStatus.DONE
+    assert any("repair slice" in log.message.lower() for log in child.work_log)
 
 
 def test_repair_disabled_by_default_blocks_on_first_failure(tmp_path, monkeypatch) -> None:
