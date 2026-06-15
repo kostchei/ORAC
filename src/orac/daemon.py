@@ -14,6 +14,7 @@ from orac.model_policy import (
     ensure_lmstudio_model_loaded,
     verify_model_slots,
 )
+from orac.models import Board
 from orac.scrum import Scrum
 from orac.storage import BoardStore
 
@@ -70,6 +71,10 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
     policy_store = ModelPolicyStore(store)
     decision = policy_store.decide()
     board = store.load()
+    # Snapshot the loaded board as the merge base: a tick is long, so a chat/UI
+    # writer may commit a new task while Scrum runs. save_merging reconciles the
+    # tick's task changes against that concurrent write instead of losing either.
+    base = Board.from_dict(board.to_dict())
     try:
         result = Scrum(
             build_brain(decision.brain, model=decision.model),
@@ -81,7 +86,7 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
     except Exception as exc:
         _record_browser_provider_cooldown(policy_store, exc)
         raise
-    store.save(board)
+    store.save_merging(board, base)
     # Record MEASURED foundation spend (from real API token usage), not a flat
     # estimate. Drains 0 when the tick used only local/browser brains (both free).
     spent = drain_foundation_spend_usd()

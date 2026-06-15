@@ -203,24 +203,34 @@ class ChatGateway:
     def _add_goal(self, goal: str, message: InboundMessage) -> str:
         if not goal:
             return "Usage: goal: <text>"
-        board = self._load_or_init_board()
-        title = goal if len(goal) <= 80 else goal[:77].rstrip() + "..."
-        task = Task(
-            title=title,
-            description=goal,
-            status=TaskStatus.READY,
-            work_kind="code",
-            acceptance_criteria=[goal],
-            metadata={
-                "request_type": "chat_goal",
-                "goal": goal,
-                "source_channel": message.channel,
-                "source_sender": message.sender,
-            },
-        )
-        task.add_log("User", f"Chat goal added from {message.channel}.", kind="user")
-        board.add_task(task)
-        self.store.save(board)
+
+        def mutate(board):
+            title = goal if len(goal) <= 80 else goal[:77].rstrip() + "..."
+            task = Task(
+                title=title,
+                description=goal,
+                status=TaskStatus.READY,
+                work_kind="code",
+                acceptance_criteria=[goal],
+                metadata={
+                    "request_type": "chat_goal",
+                    "goal": goal,
+                    "source_channel": message.channel,
+                    "source_sender": message.sender,
+                },
+            )
+            task.add_log("User", f"Chat goal added from {message.channel}.", kind="user")
+            board.add_task(task)
+            return task
+
+        # Reapply on conflict: a chat goal is a pure add, so if the daemon tick
+        # commits between our load and save, update() reloads and re-adds rather
+        # than dropping the goal with a StaleBoardError.
+        try:
+            task = self.store.update(mutate)
+        except FileNotFoundError:
+            self.store.init()
+            task = self.store.update(mutate)
         return f"Added goal {task.id}: {task.title}"
 
     def _status_text(self) -> str:

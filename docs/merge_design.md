@@ -35,39 +35,49 @@ log**, not a set of deltas that get merged. The mechanism lives in
    There is no replay-order or merge-inequality risk, and the log can never get
    ahead of the authoritative board.
 
-## Conflict resolution rule: reapply, don't merge
-The loser of the revision CAS does **not** try to three-way-merge task fields.
-It reloads the current board and **reapplies its own mutation** to the fresh
-state, then saves again:
+## Conflict resolution — IMPLEMENTED
+The loser of the revision CAS recovers instead of raising. Two strategies, chosen
+by whether the writer's mutation can be safely re-run:
 
-- **UI writer** — the operator action is a single, well-scoped change (ack a
-  notification, edit one task). On `StaleBoardError`, reload and reapply that one
-  action. These are short and almost always win the retry.
-- **Daemon writer** — a tick is large and derived from board state. The cheapest
-  correct response to `StaleBoardError` is to **discard the recomputed board and
-  re-run the tick** against the freshly-loaded board, rather than reapplying a
-  stale diff. Tick work is idempotent at the granularity of a board load, so a
-  re-run is safe.
+- **Pure writers → reapply** (`BoardStore.update(mutate)`). A chat goal-add, a UI
+  base-request, a settings change — each is a *pure function* of the board. On
+  `StaleBoardError`, reload the current board, reapply the mutation, save again
+  (bounded retries). Reapply against fresh state is exact, so the writer always
+  lands without clobbering the concurrent update. Wired at: chat `_add_goal`,
+  UI `/api/requests`.
+- **The daemon tick → task-level three-way merge** (`BoardStore.save_merging(board,
+  base)` + `board_merge.merge_boards`). A tick runs a long, **side-effecting**
+  Scrum cycle (git commits, subagent spawns) — re-running it would double-execute,
+  so reapply is *not* safe here. Instead, on conflict we reload the current board
+  and three-way merge the tick's board against it, using the loaded board as the
+  common ancestor (`base`; recoverable from the event log at that revision). Tasks
+  are the merge unit, keyed by `id`: the daemon's in-flight tasks and a concurrent
+  writer's new task are disjoint and union cleanly. Wired at: daemon
+  `run_daemon_tick`, UI `UIRuntime._loop`, UI `/api/run`.
 
-This keeps a single source of truth (`board.json`) and makes every lost-update a
-loud, recoverable `StaleBoardError` rather than silent corruption.
+This keeps a single source of truth (`board.json`) and turns every lost-update
+into a transparent recovery instead of a dropped tick.
 
-## What is NOT done, and why
-- **No per-field/CRDT merge.** Tasks have interdependent fields (status, ledger,
-  work log); a blind field merge could produce a board no single writer intended.
-  Reapply-on-fresh-state is simpler and always yields an intentional board.
-- **No timestamp-priority or "daemon-override" tie-break.** The lock + revision
-  CAS already gives a total order; there are no ties to break.
+## Merge semantics (`board_merge.merge_boards(base, ours, theirs)`)
+Per task id, against the common `base`:
+- changed by only one side → take that side's version;
+- added by one side (absent from base) → keep it;
+- deleted by one side, untouched by the other → honor the deletion;
+- **conflict** (both changed the same task differently, or modify-vs-delete) →
+  resolve by newest `updated_at` and **report** the id (never silently dropped).
+Field-level/CRDT merge is deliberately avoided — a task's fields (status, ledger,
+work log) are interdependent, so the merge unit is the whole task.
 
 ## Open items
-- Wire the **reapply loop** explicitly at both call sites (daemon `run_daemon_tick`
-  and the UI server's write path): catch `StaleBoardError`, reload, reapply/re-run,
-  bounded retry. Today the error is raised correctly but callers do not yet all
-  retry — that is the remaining work this design covers.
-- Consider shrinking the daemon's lock-held window if UI writes start starving
-  (currently a full tick can hold the board across its compute; a tick that only
-  takes the lock for the final save would reduce contention).
+- **Surface reported conflicts.** `save_merging` returns the conflicting task ids;
+  callers currently discard them. Log/notify on non-empty conflicts so a genuine
+  same-task race is operator-visible (rare: the writers touch disjoint tasks).
+- Consider shrinking the daemon's lock-held window if UI writes ever starve
+  (today the lock is only held for the final atomic save, not across the tick's
+  compute — so contention is already low; revisit only if observed).
 
 ## Source of truth
-`storage.py`: `BoardStore.save`, `_BoardLock`, `StaleBoardError`, `_save_atomic`,
-`_append_event`, `read_events`, `rebuild_from_events`, `restore_from_events`.
+`storage.py`: `BoardStore.save`, `update`, `save_merging`, `_board_at_revision`,
+`_BoardLock`, `StaleBoardError`, `_save_atomic`, `_append_event`, `read_events`,
+`rebuild_from_events`, `restore_from_events`. `board_merge.py`: `merge_boards`,
+`BoardMerge`.

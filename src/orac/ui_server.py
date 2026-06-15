@@ -31,6 +31,7 @@ from orac.model_policy import (
     lmstudio_loaded_models,
     verify_model_slots,
 )
+from orac.models import Board
 from orac.notify import review_queue_summary
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
@@ -125,13 +126,16 @@ class UIRuntime:
                 policy = policy_store.load_policy()
                 decision = policy_store.decide()
                 board = self.store.load()
+                base = Board.from_dict(board.to_dict())
                 result = Scrum(
                     build_brain(decision.brain, model=decision.model),
                     root=self.store.root,
                     originate_when_idle=True,
                     route_models=True,
                 ).run(board, cycles=int(policy["daemon_cycles"]))
-                self.store.save(board)
+                # Merge the tick's task changes against any concurrent chat/UI
+                # write instead of failing the whole tick on StaleBoardError.
+                self.store.save_merging(board, base)
                 spent = drain_foundation_spend_usd()
                 if spent > 0:
                     policy_store.record_foundation_spend(spent)
@@ -201,13 +205,13 @@ def _make_handler(
         def do_POST(self) -> None:
             if self.path == "/api/requests":
                 payload = self._read_json()
-                board = store.load()
-                task = TaskRegistry(board).add_base_request(
-                    title=str(payload.get("title", "")),
-                    description=str(payload.get("description", "")),
-                    points=int(payload.get("points", 1)),
+                task = store.update(
+                    lambda board: TaskRegistry(board).add_base_request(
+                        title=str(payload.get("title", "")),
+                        description=str(payload.get("description", "")),
+                        points=int(payload.get("points", 1)),
+                    )
                 )
-                store.save(board)
                 self._send_json(task.to_dict(), status=201)
                 return
             if self.path == "/api/run":
@@ -216,10 +220,11 @@ def _make_handler(
                 policy_store = ModelPolicyStore(store)
                 decision = policy_store.decide()
                 board = store.load()
+                base = Board.from_dict(board.to_dict())
                 result = Scrum(
                     build_brain(decision.brain, model=decision.model), root=store.root
                 ).run(board, cycles=cycles)
-                store.save(board)
+                store.save_merging(board, base)
                 spent = drain_foundation_spend_usd()
                 if spent > 0:
                     policy_store.record_foundation_spend(spent)
