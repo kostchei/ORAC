@@ -24,7 +24,8 @@ from orac.storage import BoardStore
 # ---------------------------------------------------------------------------
 
 # Selectors that signal "still generating"; absent = the turn has finished.
-_STREAMING_SELS = {"[data-is-streaming]", ".result-streaming"}
+# Claude's must match the value: the attribute persists as "false" when done.
+_STREAMING_SELS = {'[data-is-streaming="true"]', ".result-streaming"}
 # Stop-generating buttons: absent = no longer generating (the stop->send toggle).
 _STOP_SELS = {
     'button[aria-label="Stop response"]',

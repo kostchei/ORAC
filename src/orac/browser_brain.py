@@ -140,8 +140,12 @@ _RESPONSE_SELECTORS: dict[str, str] = {
 # Selector that is present WHILE streaming and absent when the response is
 # complete.  None = lean on the stop-button signal + text stability.
 _STREAMING_SELECTORS: dict[str, str | None] = {
-    # data-is-streaming attribute on the response element while Claude is typing.
-    "claude": '[data-is-streaming]',
+    # data-is-streaming on Claude's response element. It MUST match the value, not
+    # just presence: when the turn finishes the attribute persists as
+    # data-is-streaming="false", so a bare [data-is-streaming] presence selector
+    # reads "streaming forever" and the turn never completes (verified against the
+    # live DOM 2026-06-15). [data-is-streaming="true"] is present only while typing.
+    "claude": '[data-is-streaming="true"]',
     # Gemini has no reliable streaming attribute — use the stop button + stability.
     "gemini": None,
     # ChatGPT adds class "result-streaming" to the prose div while generating.
