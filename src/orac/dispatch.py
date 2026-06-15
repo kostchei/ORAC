@@ -6,24 +6,13 @@ from orac.broker_store import MAX_SUBAGENTS, BrokerStore
 
 # (e) The both-must-agree DISPATCH gate.
 #
-# Spawning a subagent is a two-party decision, asymmetric by design:
-#   - Orchestrator = proposer. It decided the decomposition; proposing IS its
-#     agreement (and the plan already passed plan-review).
-#   - Optimise = allocator. It must confirm there is room: a free roster slot AND
-#     space in the resource band for this slice. Confirming IS its agreement.
+# Spawning a subagent is a two-party decision:
+#   - Orchestrator proposes the slice.
+#   - Optimise confirms there is a free roster slot.
 #
-# Both must agree, or no spawn. The roster cap is the hard admission floor
-# (enforced again in admit_subagent); the band is the concurrency throttle — the
-# 60% utilisation idea made concrete as "sum of active slices may not exceed the
-# band". A refused spawn is not an error: the slice stays open and is retried when
-# a slot frees, which is how the system stays within its resource share.
-
-# The band ceiling: total resource slice across *active* subagents may not exceed
-# this. With the default per-subagent slice of 0.25, a ceiling of 1.0 admits four
-# concurrent doers before new spawns defer.
-ACTIVE_SLICE_CEILING = 1.0
-
-_EPSILON = 1e-9
+# The four council agents review and constrain edges. They are not the worker
+# pool. Worker fan-out is bounded by MAX_SUBAGENTS, not by a hidden resource-band
+# calculation that turns 0.25 slices into a four-worker ceiling.
 
 
 @dataclass(frozen=True)
@@ -36,21 +25,15 @@ def optimise_admits(
     store: BrokerStore,
     resource_slice: float,
     *,
-    band: float = ACTIVE_SLICE_CEILING,
+    band: float | None = None,
     cap: int = MAX_SUBAGENTS,
 ) -> DispatchDecision:
-    """Optimise's half: is there a roster slot and band room for this slice?"""
+    """Optimise's half: is there a roster slot for this slice?"""
+    del resource_slice, band
     store.reap_stale_subagents()
     if store.subagent_free_slots(cap) <= 0:
         return DispatchDecision(False, f"roster full ({cap}); no free slot")
-    projected = store.active_slice_total() + resource_slice
-    if projected > band + _EPSILON:
-        return DispatchDecision(
-            False,
-            f"resource band full: active {store.active_slice_total():.2f} + "
-            f"{resource_slice:.2f} would exceed band {band:.2f}",
-        )
-    return DispatchDecision(True, "slot and band available")
+    return DispatchDecision(True, "roster slot available")
 
 
 def both_agree(
@@ -58,15 +41,10 @@ def both_agree(
     orchestrator_proposed: bool,
     resource_slice: float,
     *,
-    band: float = ACTIVE_SLICE_CEILING,
+    band: float | None = None,
     cap: int = MAX_SUBAGENTS,
 ) -> DispatchDecision:
-    """The spawn fires only if BOTH parties agree.
-
-    Orchestrator agreement is carried in ``orchestrator_proposed`` (a slice from
-    an approved plan); Optimise agreement is the resource check. Either party
-    declining defers the spawn.
-    """
+    """The spawn fires only if Orchestrator proposed it and Optimise admits it."""
     if not orchestrator_proposed:
         return DispatchDecision(False, "Orchestrator did not propose this spawn")
     return optimise_admits(store, resource_slice, band=band, cap=cap)

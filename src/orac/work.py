@@ -7,7 +7,7 @@ from orac.agent_registry import load_agent_profiles
 from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
 from orac.broker_store import MAX_SUBAGENTS
-from orac.dispatch import ACTIVE_SLICE_CEILING, both_agree
+from orac.dispatch import both_agree
 from orac.intent_ledger import (
     SLICE_BLOCKED,
     SLICE_OPEN,
@@ -375,8 +375,9 @@ def run_decomposed_goal(
     broker: ToolBroker,
     context: dict[str, Any],
     max_steps: int = 16,
+    cap: int = MAX_SUBAGENTS,
     resource_slice: float = DEFAULT_RESOURCE_SLICE,
-    band: float = ACTIVE_SLICE_CEILING,
+    band: float | None = None,
     max_repairs: int = 0,
     review_return: bool = False,
     plan_brain: Brain | None = None,
@@ -402,14 +403,15 @@ def run_decomposed_goal(
         if slice_.get("status") != SLICE_OPEN or slice_.get("child_id"):
             continue
         # (e) both-must-agree gate: the slice is from an approved plan
-        # (Orchestrator proposed), but Optimise must also have a free slot and
-        # band room. A refused spawn defers the slice (stays open), not an error.
+        # (Orchestrator proposed), and Optimise must have a free roster slot.
+        # A refused spawn defers the slice (stays open), not an error.
         if broker.store is not None:
             decision = both_agree(
                 broker.store,
                 orchestrator_proposed=True,
                 resource_slice=resource_slice,
                 band=band,
+                cap=cap,
             )
             if not decision.agreed:
                 parent.add_log(
@@ -463,6 +465,7 @@ def run_decomposed_goal(
                 broker=broker,
                 context=slice_context,
                 max_steps=max_steps,
+                cap=cap,
                 band=band,
                 max_repairs=max_repairs,
                 child_brain=brain,
@@ -510,7 +513,7 @@ def run_orchestrated_goal(
     context: dict[str, Any],
     max_steps: int = 16,
     cap: int = MAX_SUBAGENTS,
-    band: float = ACTIVE_SLICE_CEILING,
+    band: float | None = None,
     max_repairs: int = 2,
     child_brain: Brain | None = None,
     depth: int = 0,
@@ -608,7 +611,7 @@ def run_orchestrated_goal(
     # judge that what came back is on-goal and waste-free before it integrates.
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
-        max_steps=max_steps, band=band, max_repairs=max_repairs, review_return=True,
+        max_steps=max_steps, cap=cap, band=band, max_repairs=max_repairs, review_return=True,
         plan_brain=brain, depth=depth, max_depth=max_depth,
     )
 

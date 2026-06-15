@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
-from orac.dispatch import ACTIVE_SLICE_CEILING, both_agree, optimise_admits
+from orac.dispatch import both_agree, optimise_admits
 from orac.intent_ledger import is_covered, unsatisfied
 from orac.models import Board, Task, TaskStatus
 from orac.work import run_decomposed_goal, run_orchestrated_goal
@@ -40,20 +40,19 @@ def test_no_spawn_without_orchestrator_proposal(tmp_path) -> None:
     assert "did not propose" in decision.reason
 
 
-def test_both_agree_when_slot_and_band_available(tmp_path) -> None:
+def test_both_agree_when_roster_slot_available(tmp_path) -> None:
     store = _store(tmp_path)
     decision = both_agree(store, orchestrator_proposed=True, resource_slice=0.25)
     assert decision.agreed
 
 
-def test_optimise_refuses_when_band_full(tmp_path) -> None:
+def test_optimise_does_not_cap_workers_at_four(tmp_path) -> None:
     store = _store(tmp_path)
-    # fill the band exactly (4 x 0.25 = 1.0 = ceiling)
+    # Four active subagents are just four workers, not a full worker pool.
     for _ in range(4):
         store.admit_subagent("p", "builder", "i", "intent", 0.25)
-    decision = optimise_admits(store, 0.25, band=ACTIVE_SLICE_CEILING)
-    assert not decision.agreed
-    assert "band full" in decision.reason
+    decision = optimise_admits(store, 0.25)
+    assert decision.agreed
 
 
 def test_optimise_refuses_when_roster_full(tmp_path) -> None:
@@ -64,14 +63,12 @@ def test_optimise_refuses_when_roster_full(tmp_path) -> None:
     assert "roster full" in decision.reason
 
 
-# --- band throttles a fan-out (slice deferred, parent stays open) -----------
+# --- roster throttles a fan-out (slice deferred, parent stays open) ----------
 
 
-def test_decomposed_goal_defers_slice_when_band_is_full(tmp_path) -> None:
+def test_decomposed_goal_defers_slice_when_roster_is_full(tmp_path) -> None:
     broker, store = _repo(tmp_path)
-    # pre-occupy the whole band with active subagents from elsewhere
-    for _ in range(4):
-        store.admit_subagent("other", "builder", "i", "intent", 0.25)
+    store.admit_subagent("other", "builder", "i", "intent", 0.25, cap=1)
     board = Board()
     parent = Task(title="needs room", status=TaskStatus.IN_PROGRESS)
     board.add_task(parent)
@@ -80,14 +77,15 @@ def test_decomposed_goal_defers_slice_when_band_is_full(tmp_path) -> None:
     @dataclass
     class NeverBrain:
         def think(self, *a, **k):  # noqa: ANN001
-            raise AssertionError("no spawn should happen when the band is full")
+            raise AssertionError("no spawn should happen when the roster is full")
         def think_json(self, *a, **k):  # noqa: ANN001
-            raise AssertionError("no spawn should happen when the band is full")
+            raise AssertionError("no spawn should happen when the roster is full")
 
     children = run_decomposed_goal(
         board, parent, "deliver it",
         [{"sub_intent": "only slice", "goal": "do it"}],
         "code", NeverBrain(), broker, {"repo_root": str(tmp_path)},
+        cap=1,
     )
 
     assert children == []                       # nothing spawned

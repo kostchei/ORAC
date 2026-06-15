@@ -17,7 +17,8 @@ def test_orac_agents_are_loaded_from_prompt_registry() -> None:
     profiles = load_agent_profiles()
 
     council = [profile.slug for profile in profiles if profile.kind == "council"]
-    assert council == ["intent", "optimiser", "simples", "efficiency", "orchestrator"]
+    assert council == ["intent", "optimiser", "simples", "efficiency"]
+    assert next(p for p in profiles if p.slug == "orchestrator").kind == "orchestrator"
     assert "builder" in [profile.slug for profile in profiles]
     assert next(p for p in profiles if p.slug == "builder").kind == "doer"
     assert all(profile.system_prompt for profile in profiles)

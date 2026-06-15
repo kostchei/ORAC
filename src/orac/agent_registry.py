@@ -15,7 +15,7 @@ class AgentProfile:
     protocol_file: str
     tools: list[str]
     order: int
-    kind: str = "council"  # "council" = review-loop agent; "doer" = subagent (e.g. Builder)
+    kind: str = "council"  # "council" = review lens; "orchestrator" = planner; "doer" = worker
 
 
 @dataclass(frozen=True)

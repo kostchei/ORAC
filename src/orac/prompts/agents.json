@@ -39,6 +39,7 @@
     {
       "slug": "orchestrator",
       "name": "Orchestrator",
+      "kind": "orchestrator",
       "purpose": "Coordinate the agent loop and report progress back to the main task.",
       "prompt_file": "orchestrator.md",
       "protocol_file": "orchestrator_reporter_max.json",
