@@ -67,6 +67,15 @@ def make_parser() -> argparse.ArgumentParser:
     board_sub.add_parser(
         "recover", help="Restore board.json from the last-good backup."
     )
+    board_events = board_sub.add_parser(
+        "events", help="Show the append-only board event log (commit history)."
+    )
+    board_events.add_argument(
+        "--limit", type=int, default=20, help="Show the most recent N events (0 = all)."
+    )
+    board_sub.add_parser(
+        "rebuild", help="Rebuild board.json from the event log's latest snapshot."
+    )
 
     list_cmd = subparsers.add_parser("list", help="List tasks.")
     list_cmd.add_argument("--status", choices=[status.value for status in TaskStatus])
@@ -307,6 +316,37 @@ def cmd_board_recover(store: BoardStore) -> int:
     board = store.recover()
     print(
         f"Restored {store.board_path} from {store.backup_path} "
+        f"({len(board.tasks)} task(s), revision {board.revision})."
+    )
+    return 0
+
+
+def cmd_board_events(store: BoardStore, args: argparse.Namespace) -> int:
+    events = store.read_events()
+    if not events:
+        print(f"No board events at {store.events_path}.")
+        return 0
+    limit = getattr(args, "limit", 20)
+    shown = events if limit in (0, None) else events[-limit:]
+    print(f"{len(events)} board event(s) at {store.events_path}:")
+    for event in shown:
+        changes = event.get("changes", {})
+        delta = ", ".join(
+            f"{k}={len(changes.get(k, []))}"
+            for k in ("added", "updated", "removed")
+            if changes.get(k)
+        )
+        print(
+            f"  rev {event.get('revision'):>4}  {event.get('ts', '')}  "
+            f"{event.get('tasks', 0)} task(s)" + (f"  [{delta}]" if delta else "")
+        )
+    return 0
+
+
+def cmd_board_rebuild(store: BoardStore) -> int:
+    board = store.restore_from_events()
+    print(
+        f"Rebuilt {store.board_path} from {store.events_path} "
         f"({len(board.tasks)} task(s), revision {board.revision})."
     )
     return 0
@@ -815,6 +855,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(store, args)
     if args.command == "board" and args.board_command == "recover":
         return cmd_board_recover(store)
+    if args.command == "board" and args.board_command == "events":
+        return cmd_board_events(store, args)
+    if args.command == "board" and args.board_command == "rebuild":
+        return cmd_board_rebuild(store)
     if args.command == "registry" and args.registry_command == "stats":
         return cmd_registry_stats(store)
     if args.command == "registry" and args.registry_command == "base-request":

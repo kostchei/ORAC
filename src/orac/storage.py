@@ -15,6 +15,21 @@ else:
     import fcntl
 
 
+def _board_change_summary(old: dict[str, Any], new: dict[str, Any]) -> dict[str, list[str]]:
+    """Which task ids were added / updated / removed between two board states.
+
+    Informational only — for a readable event history. The full snapshot in each
+    event is what rebuild relies on, never this summary.
+    """
+    old_tasks = {t["id"]: t for t in old.get("tasks", []) if "id" in t}
+    new_tasks = {t["id"]: t for t in new.get("tasks", []) if "id" in t}
+    return {
+        "added": [i for i in new_tasks if i not in old_tasks],
+        "updated": [i for i in new_tasks if i in old_tasks and new_tasks[i] != old_tasks[i]],
+        "removed": [i for i in old_tasks if i not in new_tasks],
+    }
+
+
 class CorruptStateError(RuntimeError):
     """Raised when persisted ORAC state cannot be decoded."""
 
@@ -101,6 +116,8 @@ class BoardStore:
         self.lock_path = self.state_dir / "board.lock"
         self.config_path = self.state_dir / "config.json"
         self.usage_path = self.state_dir / "usage.json"
+        # Append-only log of every committed board state (one JSON event per line).
+        self.events_path = self.state_dir / "board.events.jsonl"
 
     def init(self) -> Board:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +171,7 @@ class BoardStore:
         # a loud StaleBoardError instead of quiet data loss.
         with _BoardLock(self.lock_path):
             current_revision = 0
+            old_data: dict[str, Any] = {}
             if self.board_path.exists():
                 try:
                     current = json.loads(
@@ -165,6 +183,7 @@ class BoardStore:
                     raise CorruptStateError(
                         self.board_path, self.backup_path, exc
                     ) from exc
+                old_data = current
                 current_revision = int(current.get("revision", 0))
                 if board.revision != current_revision:
                     raise StaleBoardError(
@@ -179,6 +198,10 @@ class BoardStore:
             self._save_atomic(self.board_path, payload + "\n")
             self._save_atomic(self.backup_path, payload + "\n")
             board.revision = current_revision + 1
+            # Append the committed state to the event log AFTER board.json is
+            # durable, inside the same lock so events are totally ordered and the
+            # log can never get ahead of the authoritative board.
+            self._append_event(old_data, data)
 
     def recover(self) -> Board:
         with _BoardLock(self.lock_path):
@@ -195,6 +218,80 @@ class BoardStore:
                 ) from exc
             self._save_atomic(self.board_path, payload)
             return board
+
+    def _append_event(self, old_data: dict[str, Any], new_data: dict[str, Any]) -> None:
+        """Append one committed board state to the append-only event log.
+
+        Each line is a self-contained event: a full board SNAPSHOT (authoritative
+        for rebuild — replay is trivially the latest snapshot, so there is no
+        replay-inequality risk) plus a human-readable change summary (which task
+        ids were added / updated / removed since the previous commit). Append +
+        fsync per line, so a crash can only ever leave a torn FINAL line, which
+        readers skip. The log is a secondary record: board.json stays the
+        authoritative current state; the log is full history + a recovery source
+        stronger than the single last-good backup.
+        """
+        revision = int(new_data.get("revision", 0))
+        event = {
+            "seq": revision,
+            "ts": new_data.get("updated_at") or now_iso(),
+            "revision": revision,
+            "tasks": len(new_data.get("tasks", [])),
+            "changes": _board_change_summary(old_data, new_data),
+            "board": new_data,
+        }
+        line = json.dumps(event, sort_keys=True) + "\n"
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.events_path, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def read_events(self) -> list[dict[str, Any]]:
+        """All board events in commit order. Tolerant of a torn final line (a
+        crash mid-append): unparseable lines are skipped, never raised on, since
+        only the last line can be partial."""
+        if not self.events_path.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        for line in self.events_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return events
+
+    def rebuild_from_events(self) -> Board:
+        """Reconstruct the board from the event log's latest committed snapshot.
+
+        Recovers even when both board.json and the last-good backup are lost or
+        corrupt (the log is the full history). Recovers to the last FULLY-LOGGED
+        state: if a crash landed between the board.json write and the event append,
+        this returns the prior revision (board.json itself, if intact, is newer)."""
+        events = self.read_events()
+        if not events:
+            raise FileNotFoundError(
+                f"No board events at {self.events_path} to rebuild from."
+            )
+        latest = max(events, key=lambda e: int(e.get("revision", 0)))
+        return Board.from_dict(latest["board"])
+
+    def restore_from_events(self) -> Board:
+        """Rebuild from the event log and write it back as the current board."""
+        with _BoardLock(self.lock_path):
+            events = self.read_events()
+            if not events:
+                raise FileNotFoundError(
+                    f"No board events at {self.events_path} to rebuild from."
+                )
+            latest = max(events, key=lambda e: int(e.get("revision", 0)))
+            payload = json.dumps(latest["board"], indent=2, sort_keys=True) + "\n"
+            self._save_atomic(self.board_path, payload)
+            self._save_atomic(self.backup_path, payload)
+            return Board.from_dict(latest["board"])
 
     def load_json(self, path: Path, default: dict[str, Any]) -> dict[str, Any]:
         if not path.exists():

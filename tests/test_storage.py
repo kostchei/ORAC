@@ -200,3 +200,67 @@ def test_cli_board_recover(tmp_path, capsys) -> None:
     assert main(["--root", str(tmp_path), "board", "recover"]) == 0
     assert "Restored" in capsys.readouterr().out
     assert store.load().created_at == "good"
+
+
+def test_event_log_records_every_commit(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    board = store.init()                       # revision 1 (empty)
+    board.add_task(Task(title="first"))
+    store.save(board)                          # revision 2 (one task)
+    board.add_task(Task(title="second"))
+    store.save(board)                          # revision 3 (two tasks)
+
+    events = store.read_events()
+    assert [e["revision"] for e in events] == [1, 2, 3]
+    assert [e["tasks"] for e in events] == [0, 1, 2]
+    # the change summary names what moved in the last commit
+    assert len(events[-1]["changes"]["added"]) == 1
+
+
+def test_rebuild_from_events_after_board_and_backup_lost(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    board = store.init()
+    board.add_task(Task(title="survive me"))
+    store.save(board)
+    rev = board.revision
+
+    # Lose BOTH the current board and the last-good backup — only the log remains.
+    store.board_path.unlink()
+    store.backup_path.unlink()
+
+    rebuilt = store.restore_from_events()
+    assert store.board_path.exists()
+    assert rebuilt.revision == rev
+    assert [t.title for t in rebuilt.tasks] == ["survive me"]
+    assert [t.title for t in store.load().tasks] == ["survive me"]
+
+
+def test_read_events_skips_torn_final_line(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    board = store.init()
+    board.add_task(Task(title="committed"))
+    store.save(board)
+    # Simulate a crash mid-append: a partial JSON line at the end of the log.
+    with open(store.events_path, "a", encoding="utf-8") as f:
+        f.write('{"seq": 99, "board": {"tasks":')   # truncated, no newline/close
+
+    events = store.read_events()
+    assert events and max(e["revision"] for e in events) == board.revision
+    # the torn line is ignored, and rebuild still works
+    assert store.rebuild_from_events().revision == board.revision
+
+
+def test_board_events_and_rebuild_cli(tmp_path, capsys) -> None:
+    store = BoardStore(tmp_path)
+    board = store.init()
+    board.add_task(Task(title="cli task"))
+    store.save(board)
+
+    assert main(["--root", str(tmp_path), "board", "events"]) == 0
+    assert "board event" in capsys.readouterr().out.lower()
+
+    store.board_path.unlink()
+    store.backup_path.unlink()
+    assert main(["--root", str(tmp_path), "board", "rebuild"]) == 0
+    assert "Rebuilt" in capsys.readouterr().out
+    assert [t.title for t in store.load().tasks] == ["cli task"]

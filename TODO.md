@@ -64,6 +64,16 @@ before ORAC widens beyond the code-writing bootstrap.
   into a loud failure, but the losing writer still has no way to merge its
   changes. Proper resolution is the event log's job (below).
 
-- [ ] **Board event log.** The preferred end-state remains an append-only
-  event log that can rebuild the board and unify with the audit trail; the
-  atomic-write hardening above is the stopgap, not the destination.
+- [x] **Board event log.** `BoardStore` now keeps an append-only
+  `board.events.jsonl`: every committed board state is appended (full snapshot +
+  a human-readable added/updated/removed change summary) inside the same locked
+  critical section as the save, fsync'd per line. `read_events` is tolerant of a
+  torn final line (a crash mid-append); `rebuild_from_events` / `restore_from_events`
+  reconstruct the board from the log's latest snapshot — recovery stronger than the
+  single last-good backup (full history, any revision), proven by a test that
+  rebuilds after BOTH board.json and the backup are deleted. CLI: `orac board events`
+  (history) and `orac board rebuild`. The snapshot-per-commit form makes replay
+  trivially correct (no rebuild-inequality risk). **Remaining for the conflict-
+  resolution item above:** finer-grained per-field deltas + a merge of a losing
+  writer's changes, and unifying this timeline with the broker audit trail; log
+  compaction/rotation for long runs.
