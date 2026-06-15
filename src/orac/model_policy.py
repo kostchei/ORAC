@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
@@ -266,10 +266,61 @@ def next_browser_provider(policy_store: "ModelPolicyStore") -> str:
     """
     usage = policy_store.usage()
     idx = int(usage.get("browser_provider_index", 0))
+    cooldowns = _active_browser_provider_cooldowns(usage)
     provider = _BROWSER_PROVIDERS[idx % len(_BROWSER_PROVIDERS)]
+    for offset in range(len(_BROWSER_PROVIDERS)):
+        candidate = _BROWSER_PROVIDERS[(idx + offset) % len(_BROWSER_PROVIDERS)]
+        if candidate not in cooldowns:
+            provider = candidate
+            idx += offset
+            break
     usage["browser_provider_index"] = idx + 1
+    usage["browser_provider_cooldowns"] = cooldowns
     policy_store.store.save_json(policy_store.store.usage_path, usage)
     return provider
+
+
+def cooldown_browser_provider(
+    policy_store: "ModelPolicyStore",
+    provider: str,
+    *,
+    seconds: int,
+    reason: str = "",
+) -> dict[str, str]:
+    """Temporarily remove a browser foundation provider from rotation."""
+    if provider not in _BROWSER_PROVIDERS:
+        raise ValueError(f"Unknown browser provider {provider!r}.")
+    usage = policy_store.usage()
+    cooldowns = _active_browser_provider_cooldowns(usage)
+    until = datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds)))
+    cooldowns[provider] = until.isoformat()
+    usage["browser_provider_cooldowns"] = cooldowns
+    if reason:
+        notes = dict(usage.get("browser_provider_cooldown_reasons", {}))
+        notes[provider] = reason
+        usage["browser_provider_cooldown_reasons"] = notes
+    policy_store.store.save_json(policy_store.store.usage_path, usage)
+    return cooldowns
+
+
+def _active_browser_provider_cooldowns(usage: dict[str, Any]) -> dict[str, str]:
+    now = datetime.now(timezone.utc)
+    active: dict[str, str] = {}
+    raw = usage.get("browser_provider_cooldowns", {})
+    if not isinstance(raw, dict):
+        return active
+    for provider, until_raw in raw.items():
+        if provider not in _BROWSER_PROVIDERS:
+            continue
+        try:
+            until = datetime.fromisoformat(str(until_raw))
+        except ValueError:
+            continue
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if until > now:
+            active[provider] = until.isoformat()
+    return active
 
 
 def _today_key() -> str:

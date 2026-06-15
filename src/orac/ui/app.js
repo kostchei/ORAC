@@ -13,6 +13,8 @@ async function postJson(path, body) {
   return api(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+let manualRunBusy = false;
+
 function text(value) {
   return value === null || value === undefined || value === "" ? "n/a" : String(value);
 }
@@ -120,6 +122,7 @@ function renderTaskCard(task) {
 function renderRunStatus(state, loopStatus) {
   const target = document.querySelector("#run-status");
   const running = Boolean(loopStatus.running);
+  const stopping = Boolean(loopStatus.stopping);
   const current = currentFocusTask(state.tasks);
   const decision = loopStatus.last_tick?.model_decision || state.model_policy;
   const lastTick = loopStatus.last_tick;
@@ -128,22 +131,38 @@ function renderRunStatus(state, loopStatus) {
     ? new Date((lastTick.at + Number(state.settings.daemon_interval_seconds)) * 1000)
     : null;
   const nextWakeText = nextWake ? formatTime(nextWake) : "n/a";
-  const stateClass = loopStatus.last_error ? "error" : running ? "running" : "stopped";
+  const stateClass = loopStatus.last_error ? "error" : stopping ? "stopping" : running ? "running" : "stopped";
   target.className = `run-status panel ${stateClass}`;
   target.innerHTML = `
     <div class="run-state">
-      <strong>${running ? "Running" : "Stopped"}</strong>
+      <strong>${stopping ? "Stopping" : running ? "Running" : "Stopped"}</strong>
       <span>${html(lastTouched)} · last tick ${html(relativeTime(lastTick?.at))}</span>
     </div>
     <div class="run-focus">
       <strong>${html(current ? current.title : "No current task")}</strong><br />
       ${html(current ? `${current.status} · ${nextActionFor(current)}` : "Add a request to give ORAC work.")}
-      ${loopStatus.last_error ? `<br /><span class="status-blocked">Error: ${html(loopStatus.last_error)}</span>` : ""}
+      ${loopStatus.last_error ? `<br /><span class="status-blocked">Loop error ${html(relativeTime(loopStatus.last_error_at))}: ${html(loopStatus.last_error)}</span>` : ""}
     </div>
     <div class="run-meta">
       Model: <strong>${html(decision.brain)}/${html(decision.model)}</strong><br />
       Next wake: ${html(nextWakeText)}
     </div>`;
+  renderLoopControls(loopStatus);
+}
+
+function setPressedButton(selector, pressed, disabled = false) {
+  const button = document.querySelector(selector);
+  button.setAttribute("aria-pressed", pressed ? "true" : "false");
+  button.classList.toggle("is-active", pressed);
+  button.disabled = disabled;
+}
+
+function renderLoopControls(loopStatus) {
+  const running = Boolean(loopStatus.running);
+  const stopping = Boolean(loopStatus.stopping);
+  setPressedButton("#run-cycle", manualRunBusy, running || manualRunBusy);
+  setPressedButton("#start-loop", running && !stopping, running || manualRunBusy);
+  setPressedButton("#stop-loop", stopping, !running || stopping);
 }
 
 function renderAttention(state, loopStatus) {
@@ -404,8 +423,10 @@ function renderSettings(settings) {
 
 function renderLoopStatusText(status) {
   const last = status.last_tick ? `Last tick touched ${tickTouchedCount(status.last_tick)} task(s).` : "No tick yet.";
+  const state = status.stopping ? "Loop stopping." : status.running ? "Loop running." : "Loop stopped.";
+  const error = status.last_error ? ` Last error: ${status.last_error}` : "";
   document.querySelector("#loop-status").textContent =
-    `${status.running ? "Loop running." : "Loop stopped."} The wake interval controls how often agents check for work; it is not a keepalive. ${last} ${status.last_error || ""}`;
+    `${state} The wake interval controls how often agents check for work; it is not a keepalive. ${last}${error}`;
 }
 
 function renderTimeline(events) {
@@ -567,8 +588,14 @@ document.querySelector(".chat-panel").addEventListener("click", async (event) =>
 });
 
 document.querySelector("#run-cycle").addEventListener("click", async () => {
-  await postJson("/api/run", { cycles: 1 });
-  await refresh();
+  manualRunBusy = true;
+  setPressedButton("#run-cycle", true, true);
+  try {
+    await postJson("/api/run", { cycles: 1 });
+  } finally {
+    manualRunBusy = false;
+    await refresh();
+  }
 });
 
 let audioStream = null;

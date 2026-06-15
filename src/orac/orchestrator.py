@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from orac.agent_registry import load_agent_profiles
@@ -48,7 +49,9 @@ Reply with ONE JSON object and nothing else:
 {"slices": [{"sub_intent": "<one slice of the goal>", "goal": "<concrete work>",
              "acceptance_criteria": ["<checkable>", "..."]}, ...]}
 The slices' sub_intents together must COVER the full intent — no gap. Each slice
-must be independently doable and verifiable by one subagent."""
+must be independently doable and verifiable by one subagent.
+Do not ask for files or architecture. You already have the goal, intent, repo
+root, tools, and acceptance criteria needed to create the work breakdown."""
 
 
 def abundance_frame(free: int, cap: int) -> str:
@@ -105,13 +108,7 @@ def propose_decomposition(
         "Your decomposition:"
     )
     seed = task or Task(title="decompose", description=goal)
-    think_json = getattr(brain, "think_json", None)
-    if callable(think_json):
-        reply = think_json("Orchestrator", "orchestrator", seed, prompt, DECOMPOSITION_SCHEMA)
-    else:
-        reply = brain.think("Orchestrator", "orchestrator", seed, prompt)
-
-    decision = parse_decision(reply)
+    reply, decision = _ask_for_decomposition(brain, seed, prompt)
     if not decision or "slices" not in decision:
         raise ValueError(
             f"Orchestrator produced no parseable decomposition: {reply[:300]!r}"
@@ -138,3 +135,56 @@ def propose_decomposition(
             f"slot(s) are free; the plan exceeds its honest budget."
         )
     return slices
+
+
+def _ask_for_decomposition(
+    brain: Brain, seed: Task, prompt: str
+) -> tuple[str, dict[str, Any] | None]:
+    think_json = getattr(brain, "think_json", None)
+    if callable(think_json):
+        reply = think_json("Orchestrator", "orchestrator", seed, prompt, DECOMPOSITION_SCHEMA)
+    else:
+        reply = brain.think("Orchestrator", "orchestrator", seed, prompt)
+    decision = _parse_decomposition_reply(reply)
+    if decision is not None and "slices" in decision:
+        return reply, decision
+
+    retry_prompt = (
+        f"{prompt}\n\n"
+        "Your previous reply was rejected because it was not the required JSON "
+        f"decomposition:\n{reply[:500]}\n\n"
+        "Return only the JSON object now. Do not ask questions. Do not request "
+        "files. Do not include markdown fences or explanation."
+    )
+    if callable(think_json):
+        retry = think_json(
+            "Orchestrator", "orchestrator", seed, retry_prompt, DECOMPOSITION_SCHEMA
+        )
+    else:
+        retry = brain.think("Orchestrator", "orchestrator", seed, retry_prompt)
+    return retry, _parse_decomposition_reply(retry)
+
+
+def _parse_decomposition_reply(reply: str) -> dict[str, Any] | None:
+    """Parse a decomposition reply, tolerating provider UI copy around JSON.
+
+    Agent decisions stay strict in ``parse_decision``. Decomposition is the one
+    browser-frontier step where provider DOM extraction can include nearby prompt
+    text; accept the first embedded JSON object that actually contains ``slices``.
+    """
+    decision = parse_decision(reply)
+    if decision is not None:
+        return decision
+
+    decoder = json.JSONDecoder()
+    text = reply.strip()
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            candidate, _end = decoder.raw_decode(text[idx:])
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and "slices" in candidate:
+            return candidate
+    return None

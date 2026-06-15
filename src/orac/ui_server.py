@@ -26,6 +26,7 @@ from orac.dependency_installer import install_audio_stack
 from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
     ModelPolicyStore,
+    cooldown_browser_provider,
     ensure_lmstudio_model_loaded,
     lmstudio_loaded_models,
     verify_model_slots,
@@ -83,12 +84,16 @@ class UIRuntime:
         self.thread: threading.Thread | None = None
         self.last_tick: dict[str, Any] | None = None
         self.last_error: str | None = None
+        self.last_error_at: float | None = None
 
     def status(self) -> dict[str, Any]:
+        running = bool(self.thread and self.thread.is_alive())
         return {
-            "running": bool(self.thread and self.thread.is_alive()),
+            "running": running,
+            "stopping": running and self.stop_event.is_set(),
             "last_tick": self.last_tick,
             "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
         }
 
     def record_tick(self, result: Any, decision: Any) -> dict[str, Any]:
@@ -98,12 +103,15 @@ class UIRuntime:
             "at": time.time(),
         }
         self.last_error = None
+        self.last_error_at = None
         return self.last_tick
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
+        self.last_error = None
+        self.last_error_at = None
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
 
@@ -131,6 +139,8 @@ class UIRuntime:
                 interval = int(policy["daemon_interval_seconds"])
             except Exception as exc:
                 self.last_error = str(exc)
+                self.last_error_at = time.time()
+                _record_browser_provider_cooldown(policy_store, exc)
                 interval = 30
             self.stop_event.wait(interval)
 
@@ -140,28 +150,29 @@ def _make_handler(
 ) -> type[BaseHTTPRequestHandler]:
     class ORACHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path == "/":
+            path = self.path.split("?", 1)[0]
+            if path == "/":
                 self._send_static("index.html", "text/html; charset=utf-8")
                 return
-            if self.path == "/static/styles.css":
+            if path == "/static/styles.css":
                 self._send_static("styles.css", "text/css; charset=utf-8")
                 return
-            if self.path == "/static/app.js":
+            if path == "/static/app.js":
                 self._send_static("app.js", "text/javascript; charset=utf-8")
                 return
-            if self.path == "/api/state":
+            if path == "/api/state":
                 self._send_json(_state_payload(store))
                 return
-            if self.path == "/api/resources":
+            if path == "/api/resources":
                 self._send_json(read_resource_snapshot().to_dict())
                 return
-            if self.path == "/api/model-policy":
+            if path == "/api/model-policy":
                 self._send_json(ModelPolicyStore(store).decide().to_dict())
                 return
-            if self.path == "/api/models/loaded":
+            if path == "/api/models/loaded":
                 self._send_json({"models": lmstudio_loaded_models()})
                 return
-            if self.path == "/api/browser/status":
+            if path == "/api/browser/status":
                 policy = ModelPolicyStore(store).load_policy()
                 cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
                 self._send_json({
@@ -170,19 +181,19 @@ def _make_handler(
                     "connected": cdp_reachable(cdp_url),
                 })
                 return
-            if self.path == "/api/audio/devices":
+            if path == "/api/audio/devices":
                 self._send_json(audio_status().to_dict())
                 return
-            if self.path == "/api/settings":
+            if path == "/api/settings":
                 self._send_json(ModelPolicyStore(store).load_policy())
                 return
-            if self.path == "/api/chat":
+            if path == "/api/chat":
                 self._send_json(_chat_payload(store, chat_runtime))
                 return
-            if self.path == "/api/loop/status":
+            if path == "/api/loop/status":
                 self._send_json(runtime.status())
                 return
-            if self.path == "/api/reviews":
+            if path == "/api/reviews":
                 self._send_json(_reviews_payload(store))
                 return
             self.send_error(404)
@@ -331,6 +342,7 @@ def _make_handler(
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -339,11 +351,31 @@ def _make_handler(
             data = files("orac").joinpath(f"ui/{name}").read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
 
     return ORACHandler
+
+
+def _record_browser_provider_cooldown(
+    policy_store: ModelPolicyStore, exc: Exception
+) -> None:
+    if exc.__class__.__name__ != "ProviderRateLimited":
+        return
+    provider = getattr(exc, "provider", "")
+    if not provider:
+        return
+    try:
+        cooldown_browser_provider(
+            policy_store,
+            str(provider),
+            seconds=3600,
+            reason=str(exc),
+        )
+    except Exception:
+        return
 
 
 def _state_payload(store: BoardStore) -> dict[str, Any]:

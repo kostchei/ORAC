@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
+from orac.intent_ledger import open_ledger
 from orac.models import Board, CapabilityRequest, CapabilityStatus, Task, TaskStatus
 from orac.policy import contract_denial
 from orac.scrum import Scrum
@@ -314,3 +315,35 @@ def test_build_routes_simple_to_doer_and_complex_to_fanout(tmp_path, monkeypatch
     board.add_task(complex_task)
     scrum._build_if_goal_task(board, complex_task)
     assert calls == {"goal": 1, "orchestrated": 1}
+
+
+def test_scrum_resumes_existing_open_decomposition_ledger(tmp_path, monkeypatch) -> None:
+    scrum = _scrum(tmp_path)
+    board = Board()
+    parent = Task(
+        title="parent",
+        status=TaskStatus.IN_PROGRESS,
+        work_kind="code",
+        metadata={"goal": "ship parent"},
+    )
+    open_ledger(
+        parent,
+        "ship parent",
+        [{"sub_intent": "slice", "goal": "do slice", "acceptance_criteria": ["ok"]}],
+    )
+    board.add_task(parent)
+
+    calls = {"resume": 0}
+    import orac.work as work_mod
+
+    def fake_resume(*, parent, **k):
+        calls["resume"] += 1
+        parent.add_log("Optimise", "Spawn deferred in test.")
+        return []
+
+    monkeypatch.setattr(work_mod, "run_decomposed_goal", fake_resume)
+
+    result = scrum.run(board, cycles=1)
+
+    assert calls["resume"] == 1
+    assert result.touched_tasks == 1

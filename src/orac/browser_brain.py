@@ -88,6 +88,10 @@ _PROVIDER_ERROR_PATTERNS: tuple[tuple[re.Pattern[str], type[BrowserProviderError
     (re.compile(r"usage (cap|limit) (has been )?reached", re.I), ProviderRateLimited),
     (re.compile(r"message limit (reached|hit)", re.I), ProviderRateLimited),
     (re.compile(r"you('?ve| have)?\s*hit (the|your)\s+\w*\s*limit", re.I), ProviderRateLimited),
+    (re.compile(r"past your plan'?s included usage", re.I), ProviderRateLimited),
+    (re.compile(r"session limit resets", re.I), ProviderRateLimited),
+    (re.compile(r"out of codex messages", re.I), ProviderRateLimited),
+    (re.compile(r"rate limit resets", re.I), ProviderRateLimited),
 )
 
 

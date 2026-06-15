@@ -301,8 +301,9 @@ class BrowserKeyboard:
 
 
 class BrowserPage:
-    def __init__(self, session: CDPSession) -> None:
+    def __init__(self, session: CDPSession, target_id: str | None = None) -> None:
         self._session = session
+        self._target_id = target_id
         self.keyboard = BrowserKeyboard(self)
         self._active_selector: str | None = None
         self._active_index = 0
@@ -334,18 +335,24 @@ class BrowserPage:
         raise TimeoutError(f"Timed out waiting for selector {selector!r}.")
 
     def close(self) -> None:
-        # Target closure is optional for ORAC's long-lived browser profile. Leaving
-        # it open is safer than closing a tab Chrome has already detached.
-        return
+        if not self._target_id:
+            return
+        try:
+            self._session.call("Target.closeTarget", {"targetId": self._target_id})
+        except Exception:
+            # Closing the current target can detach the websocket before Chrome
+            # sends a normal reply. Treat that as successful teardown.
+            pass
 
 
 class BrowserConnection:
-    def __init__(self, session: CDPSession) -> None:
+    def __init__(self, session: CDPSession, target_id: str | None = None) -> None:
         self._session = session
+        self._target_id = target_id
 
     def __enter__(self) -> BrowserPage:
         self._session.__enter__()
-        return BrowserPage(self._session)
+        return BrowserPage(self._session, self._target_id)
 
     def __exit__(self, *exc: object) -> None:
         self._session.__exit__(*exc)
@@ -365,4 +372,4 @@ def open_cdp_page(cdp_url: str, *, timeout: float = 30.0) -> BrowserConnection:
     ws_url = target.get("webSocketDebuggerUrl")
     if not ws_url:
         raise BrowserPrimitiveError("Chrome did not return a page websocket URL.")
-    return BrowserConnection(CDPSession(str(ws_url), timeout=timeout))
+    return BrowserConnection(CDPSession(str(ws_url), timeout=timeout), target.get("id"))

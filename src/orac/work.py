@@ -10,9 +10,11 @@ from orac.broker_store import MAX_SUBAGENTS
 from orac.dispatch import ACTIVE_SLICE_CEILING, both_agree
 from orac.intent_ledger import (
     SLICE_BLOCKED,
+    SLICE_OPEN,
     SLICE_SATISFIED,
     attach_child,
     coverage_report,
+    has_ledger,
     is_blocked,
     is_covered,
     open_ledger,
@@ -229,7 +231,19 @@ def run_goal_task(
             broker.store.set_subagent_status(subagent_id, status)
 
     session = AgentSession(profile=doer, brain=brain, broker=broker, max_steps=max_steps)
-    result = session.run(child, contract)
+    try:
+        result = session.run(child, contract)
+    except Exception as exc:  # noqa: BLE001 - a subagent crash must free its lease
+        child.add_log("system", f"Subagent session crashed: {type(exc).__name__}: {exc}")
+        child.transition(TaskStatus.BLOCKED)
+        _retire("blocked")
+        parent.transition(TaskStatus.BLOCKED)
+        parent.add_log(
+            "Orchestrator",
+            f"{spec.kind} subtask {child.id} blocked: subagent crashed "
+            f"({type(exc).__name__}: {exc})",
+        )
+        return child
 
     if result.status == "done":
         # Generation is cheap, verification is scarce: the doer's self-reported
@@ -381,9 +395,12 @@ def run_decomposed_goal(
     repair loop per slice (rugged decomposition §4.5–4.8) — opt-in, default 0;
     ``run_orchestrated_goal`` (the full fan-out) turns it on.
     """
-    open_ledger(parent, intent, decomposition)
+    if not has_ledger(parent):
+        open_ledger(parent, intent, decomposition)
     children: list[Task] = []
     for index, slice_ in enumerate(slices(parent)):
+        if slice_.get("status") != SLICE_OPEN or slice_.get("child_id"):
+            continue
         # (e) both-must-agree gate: the slice is from an approved plan
         # (Orchestrator proposed), but Optimise must also have a free slot and
         # band room. A refused spawn defers the slice (stays open), not an error.

@@ -324,6 +324,24 @@ def test_browser_provider_round_robin(tmp_path, monkeypatch) -> None:
     assert providers == _BROWSER_PROVIDERS * 2
 
 
+def test_browser_provider_cooldown_skips_provider(tmp_path) -> None:
+    from orac.model_policy import (
+        ModelPolicyStore,
+        cooldown_browser_provider,
+        next_browser_provider,
+    )
+    from orac.storage import BoardStore
+
+    store = BoardStore(tmp_path)
+    store.init()
+    ps = ModelPolicyStore(store)
+    cooldown_browser_provider(ps, "claude", seconds=3600, reason="usage cap")
+
+    providers = [next_browser_provider(ps) for _ in range(4)]
+
+    assert providers == ["gemini", "openai", "gemini", "openai"]
+
+
 def test_browser_provider_stored_in_task_metadata(tmp_path, monkeypatch) -> None:
     """The assigned provider is stored in task.metadata so session_brain_for uses it."""
     from orac.model_policy import ModelPolicyStore, session_brain_for

@@ -197,6 +197,31 @@ button:focus-visible {
   outline: none;
 }
 
+button.is-active,
+button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 0 -3px 0 var(--mustard);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+button:disabled:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+button.is-active:disabled,
+button[aria-pressed="true"]:disabled {
+  opacity: 1;
+  background: var(--ink);
+  color: var(--paper);
+}
+
 /* the primary masthead action wears the unusual accent */
 #run-cycle {
   background: var(--mustard);
@@ -241,6 +266,10 @@ button:focus-visible {
 
 .run-status.running {
   border-left-color: var(--moss);
+}
+
+.run-status.stopping {
+  border-left-color: var(--mustard);
 }
 
 .run-status.error {

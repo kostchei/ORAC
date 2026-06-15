@@ -96,6 +96,30 @@ def test_decomposed_goal_defers_slice_when_band_is_full(tmp_path) -> None:
     assert any("deferred" in e.message for e in parent.work_log)
 
 
+def test_subagent_crash_retires_resource_reservation(tmp_path) -> None:
+    broker, store = _repo(tmp_path)
+    board = Board()
+    parent = Task(title="crashy", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    @dataclass
+    class CrashBrain:
+        def think_json(self, *a, **k):  # noqa: ANN001
+            raise RuntimeError("model transport died")
+
+    children = run_decomposed_goal(
+        board, parent, "deliver it",
+        [{"sub_intent": "slice", "goal": "do it", "acceptance_criteria": ["ok"]}],
+        "code", CrashBrain(), broker, {"repo_root": str(tmp_path)},
+    )
+
+    assert len(children) == 1
+    assert children[0].status is TaskStatus.BLOCKED
+    assert store.active_slice_total() == 0
+    assert store.subagent_roster_count() == 0
+    assert any("subagent crashed" in entry.message for entry in parent.work_log)
+
+
 # --- the full orchestrated fan-out -----------------------------------------
 
 

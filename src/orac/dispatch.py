@@ -40,6 +40,7 @@ def optimise_admits(
     cap: int = MAX_SUBAGENTS,
 ) -> DispatchDecision:
     """Optimise's half: is there a roster slot and band room for this slice?"""
+    store.reap_stale_subagents()
     if store.subagent_free_slots(cap) <= 0:
         return DispatchDecision(False, f"roster full ({cap}); no free slot")
     projected = store.active_slice_total() + resource_slice

@@ -321,6 +321,23 @@ def test_rate_limit_banner_raises_provider_rate_limited(monkeypatch) -> None:
         brain.think("builder", "doer", task, "hi")
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "You're now past your plan's included usage. Your session limit resets at 8:50 PM.",
+        "You're out of Codex messages\nYour rate limit resets on 11:44 PM.",
+    ],
+)
+def test_reported_provider_caps_raise_provider_rate_limited(monkeypatch, message) -> None:
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(response_el_text=message, provider="claude")
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+
+    with pytest.raises(bb.ProviderRateLimited):
+        brain.think("builder", "doer", task, "hi")
+
+
 def test_empty_response_raises_provider_unavailable(monkeypatch) -> None:
     # An empty turn after completion is a non-answer, not the model's reply.
     task = Task(title="t", status=TaskStatus.IN_PROGRESS)
@@ -550,6 +567,19 @@ def test_build_brain_browser_default_provider() -> None:
     brain = build_brain("browser")
     assert isinstance(brain, FallbackBrain)
     assert isinstance(brain.primary, BrowserFoundationBrain)
+
+
+def test_browser_provider_rate_limit_is_not_swallowed_by_fallback() -> None:
+    from orac.llm import RulesBrain
+
+    class RateLimitedBrain:
+        def think(self, agent_name, role, task, prompt):
+            raise bb.ProviderRateLimited("claude", "session limit resets")
+
+    brain = FallbackBrain(primary=RateLimitedBrain(), fallback=RulesBrain())
+
+    with pytest.raises(bb.ProviderRateLimited):
+        brain.think("Orchestrator", "orchestrator", Task(title="t"), "go")
 
 
 def test_build_brain_unknown_raises() -> None:

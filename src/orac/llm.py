@@ -221,6 +221,8 @@ class FallbackBrain:
         try:
             response = self.primary.think(agent_name, role, task, prompt)
         except RuntimeError as exc:
+            if _should_not_fallback(exc):
+                raise
             task.add_log("system", f"Primary brain unavailable, using rules brain: {exc}")
             return self.fallback.think(agent_name, role, task, prompt)
         return response or self.fallback.think(agent_name, role, task, prompt)
@@ -241,6 +243,8 @@ class FallbackBrain:
             else:
                 response = self.primary.think(agent_name, role, task, prompt)
         except RuntimeError as exc:
+            if _should_not_fallback(exc):
+                raise
             task.add_log("system", f"Primary brain unavailable, using fallback: {exc}")
             return self._fallback_json(agent_name, role, task, prompt, schema)
         return response or self._fallback_json(agent_name, role, task, prompt, schema)
@@ -252,6 +256,16 @@ class FallbackBrain:
         if callable(fallback_json):
             return fallback_json(agent_name, role, task, prompt, schema)
         return self.fallback.think(agent_name, role, task, prompt)
+
+
+def _should_not_fallback(exc: RuntimeError) -> bool:
+    """Provider-side browser caps are routing signals, not model answers.
+
+    Let the runtime see them so it can cool down that browser provider and rotate
+    to the next one. Falling back to local here hides the outage and defeats the
+    browser-foundation planning contract.
+    """
+    return exc.__class__.__name__ == "ProviderRateLimited" and hasattr(exc, "provider")
 
 
 def build_brain(name: str, model: str | None = None) -> Brain:

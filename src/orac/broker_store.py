@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,7 @@ MAX_SUBAGENTS = 500
 
 # A spawned subagent that is still drawing (or holding) resources.
 _LIVE_SUBAGENT_STATUSES = ("proposed", "active")
+STALE_SUBAGENT_SECONDS = 10 * 60
 
 
 @dataclass(frozen=True)
@@ -680,6 +682,28 @@ class BrokerStore:
                 "WHERE status = 'active'"
             ).fetchone()
         return float(row[0])
+
+    def reap_stale_subagents(
+        self,
+        *,
+        older_than_seconds: int = STALE_SUBAGENT_SECONDS,
+        status: str = "blocked",
+    ) -> int:
+        """Retire active/proposed subagent reservations that cannot still be live."""
+        if status not in {"done", "blocked", "retired"}:
+            raise ValueError(f"Invalid stale subagent status {status!r}.")
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        ).replace(microsecond=0).isoformat()
+        resolved = now_iso()
+        placeholders = ", ".join("?" for _ in _LIVE_SUBAGENT_STATUSES)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE subagents SET status = ?, resolved_at = ? "
+                f"WHERE status IN ({placeholders}) AND created_at < ?",
+                (status, resolved, *_LIVE_SUBAGENT_STATUSES, cutoff),
+            )
+            return int(cursor.rowcount or 0)
 
     def admit_subagent(
         self,

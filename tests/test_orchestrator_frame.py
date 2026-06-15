@@ -83,10 +83,41 @@ def test_plan_exceeding_free_budget_is_refused(tmp_path) -> None:
 
 def test_unparseable_plan_raises(tmp_path) -> None:
     store = _store(tmp_path)
-    brain = ScriptedBrain(["let me think about how to break this down..."])
+    brain = ScriptedBrain([
+        "let me think about how to break this down...",
+        "still not json",
+    ])
 
     with pytest.raises(ValueError, match="no parseable decomposition"):
         propose_decomposition("g", "i", store, brain)
+
+
+def test_unparseable_plan_gets_one_json_retry(tmp_path) -> None:
+    store = _store(tmp_path)
+    brain = ScriptedBrain(["share the files first", _plan("part a")])
+
+    slices = propose_decomposition("g", "i", store, brain)
+
+    assert [s["sub_intent"] for s in slices] == ["part a"]
+    assert "previous reply was rejected" in brain.prompts[1]
+
+
+def test_embedded_decomposition_json_is_accepted(tmp_path) -> None:
+    store = _store(tmp_path)
+    wrapped = (
+        "Your decomposition:\n\n"
+        "some copied provider chrome\n"
+        f"{_plan('event log schema', 'merge handler')}\n"
+        "trailing UI text"
+    )
+    brain = ScriptedBrain([wrapped])
+
+    slices = propose_decomposition("g", "i", store, brain)
+
+    assert [s["sub_intent"] for s in slices] == [
+        "event log schema",
+        "merge handler",
+    ]
 
 
 def test_empty_slices_raises(tmp_path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from orac.broker_store import MAX_SUBAGENTS, BrokerStore
@@ -81,6 +82,27 @@ def test_active_slice_total_sums_only_active(tmp_path) -> None:
     assert store.active_slice_total() == 0.5
 
     store.set_subagent_status(a, "done")  # done no longer counts toward the band
+    assert store.active_slice_total() == 0.25
+
+
+def test_reap_stale_subagents_frees_leaked_active_reservations(tmp_path) -> None:
+    store = _store(tmp_path)
+    stale = _admit(store, slice=0.25)
+    fresh = _admit(store, slice=0.25)
+    old_created = (
+        datetime.now(timezone.utc) - timedelta(minutes=20)
+    ).replace(microsecond=0).isoformat()
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE subagents SET created_at = ? WHERE id = ?",
+            (old_created, stale),
+        )
+
+    assert store.reap_stale_subagents(older_than_seconds=600) == 1
+
+    statuses = {sa.id: sa.status for sa in store.list_subagents()}
+    assert statuses[stale] == "blocked"
+    assert statuses[fresh] == "active"
     assert store.active_slice_total() == 0.25
 
 

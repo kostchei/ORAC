@@ -10,6 +10,7 @@ from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.notify import review_queue_summary
 from orac.model_policy import (
     ModelPolicyStore,
+    cooldown_browser_provider,
     ensure_lmstudio_model_loaded,
     verify_model_slots,
 )
@@ -69,13 +70,17 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
     policy_store = ModelPolicyStore(store)
     decision = policy_store.decide()
     board = store.load()
-    result = Scrum(
-        build_brain(decision.brain, model=decision.model),
-        root=store.root,
-        originate_when_idle=True,
-        route_models=True,
-        llm_lenses=True,
-    ).run(board, cycles=cycles)
+    try:
+        result = Scrum(
+            build_brain(decision.brain, model=decision.model),
+            root=store.root,
+            originate_when_idle=True,
+            route_models=True,
+            llm_lenses=True,
+        ).run(board, cycles=cycles)
+    except Exception as exc:
+        _record_browser_provider_cooldown(policy_store, exc)
+        raise
     store.save(board)
     # Record MEASURED foundation spend (from real API token usage), not a flat
     # estimate. Drains 0 when the tick used only local/browser brains (both free).
@@ -94,3 +99,14 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
 
 def tick_payload(store: BoardStore, cycles: int = 1) -> dict[str, object]:
     return asdict(run_daemon_tick(store, cycles=cycles))
+
+
+def _record_browser_provider_cooldown(
+    policy_store: ModelPolicyStore, exc: Exception
+) -> None:
+    if exc.__class__.__name__ != "ProviderRateLimited":
+        return
+    provider = getattr(exc, "provider", "")
+    if not provider:
+        return
+    cooldown_browser_provider(policy_store, str(provider), seconds=3600, reason=str(exc))

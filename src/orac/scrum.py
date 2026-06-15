@@ -6,6 +6,7 @@ from pathlib import Path
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
 from orac.intent_gate import IntentGate
+from orac.intent_ledger import has_ledger
 from orac.llm import Brain
 from orac.models import Board, Task, TaskStatus
 
@@ -126,6 +127,8 @@ class Scrum:
             return False
         if task.work_kind is None or "goal" not in task.metadata:
             return False
+        if task.status == TaskStatus.IN_PROGRESS and has_ledger(task):
+            return self._resume_decomposed_goal(board, task)
         if task.status != TaskStatus.READY:
             return False
 
@@ -182,6 +185,37 @@ class Scrum:
         elif child.status == TaskStatus.BLOCKED:
             self._maybe_escalate(task)
         return True
+
+    def _goal_context(self, task: Task) -> dict[str, str]:
+        context: dict[str, str] = {"repo_root": str(self.root)}
+        for key in ("app_url", "cdp_url"):
+            value = task.metadata.get(key)
+            if value:
+                context[key] = str(value)
+        return context
+
+    def _resume_decomposed_goal(self, board: Board, task: Task) -> bool:
+        if self.broker is None or self.root is None or task.work_kind is None:
+            return False
+        from orac.work import run_decomposed_goal
+
+        before_logs = len(task.work_log)
+        children = run_decomposed_goal(
+            board=board,
+            parent=task,
+            intent=task.description or str(task.metadata.get("goal", task.title)),
+            decomposition=[],
+            work_kind=task.work_kind,
+            brain=self._session_brain(task),
+            broker=self.broker,
+            context=self._goal_context(task),
+            max_repairs=2,
+            review_return=True,
+            plan_brain=self._foundation_brain(),
+        )
+        if task.status == TaskStatus.BLOCKED:
+            self._maybe_escalate(task)
+        return bool(children) or len(task.work_log) != before_logs
 
     def _session_brain(self, task: Task) -> Brain:
         if not self.route_models:
