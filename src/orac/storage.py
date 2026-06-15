@@ -5,14 +5,17 @@ import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable, TypeVar
 
+from orac.board_merge import merge_boards
 from orac.models import Board, now_iso
 
 if os.name == "nt":
     import msvcrt
 else:
     import fcntl
+
+T = TypeVar("T")
 
 
 def _board_change_summary(old: dict[str, Any], new: dict[str, Any]) -> dict[str, list[str]]:
@@ -202,6 +205,68 @@ class BoardStore:
             # durable, inside the same lock so events are totally ordered and the
             # log can never get ahead of the authoritative board.
             self._append_event(old_data, data)
+
+    def update(self, mutate: Callable[[Board], T], *, retries: int = 5) -> T:
+        """Load → mutate → save, reapplying ``mutate`` to a freshly reloaded
+        board if a concurrent writer bumped the revision in between.
+
+        The recovery path (beyond raising ``StaleBoardError``) for writers whose
+        mutation is a *pure function* of the board — add a task, change a field,
+        ack a slice. Reapplying against the current board is exact, so the writer
+        always lands without clobbering the concurrent update. Bounded by
+        ``retries``; the last conflict is re-raised if the budget is exhausted.
+        """
+        error: StaleBoardError | None = None
+        for _ in range(retries + 1):
+            board = self.load()
+            result = mutate(board)
+            try:
+                self.save(board)
+                return result
+            except StaleBoardError as exc:
+                error = exc
+        assert error is not None  # the loop only exits early on success
+        raise error
+
+    def save_merging(
+        self, board: Board, base: Board | None = None, *, retries: int = 5
+    ) -> list[str]:
+        """Save ``board``; on a concurrent-write conflict, three-way merge it
+        against the current on-disk board and retry. Returns the task ids that
+        were genuine merge conflicts (resolved by newest update, never dropped).
+
+        The recovery path for writers whose mutation *cannot* simply be reapplied
+        — the daemon tick runs a long, side-effecting Scrum cycle that must not be
+        re-executed. ``base`` is the board as loaded *before* the mutation (the
+        common ancestor); if omitted it is recovered from the event log at
+        ``board.revision``. The merge is task-level: the daemon's in-flight tasks
+        and a concurrent writer's new task are disjoint and union cleanly.
+        """
+        ours = board
+        candidate = board
+        conflicts: list[str] = []
+        for attempt in range(retries + 1):
+            try:
+                self.save(candidate)
+                return conflicts
+            except StaleBoardError:
+                if attempt >= retries:
+                    raise
+                ancestor = base if base is not None else self._board_at_revision(ours.revision)
+                if ancestor is None:
+                    raise  # no common base to merge against — fail closed
+                theirs = self.load()
+                merge = merge_boards(ancestor, ours, theirs)
+                conflicts = merge.conflicts
+                candidate = merge.board  # revision == theirs.revision, so the next CAS matches
+        return conflicts  # unreachable: the loop returns or raises
+
+    def _board_at_revision(self, revision: int) -> Board | None:
+        """The board snapshot at ``revision`` from the event log, or None."""
+        for event in self.read_events():
+            if int(event.get("revision", -1)) == revision:
+                return Board.from_dict(event["board"])
+        return None
 
     def recover(self) -> Board:
         with _BoardLock(self.lock_path):

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import pytest
 from orac.cli import main
-from orac.models import Board, Task
+from orac.models import Board, Task, TaskStatus
 from orac.storage import BoardStore, CorruptStateError, StaleBoardError, _BoardLock
 
 
@@ -264,3 +264,89 @@ def test_board_events_and_rebuild_cli(tmp_path, capsys) -> None:
     assert main(["--root", str(tmp_path), "board", "rebuild"]) == 0
     assert "Rebuilt" in capsys.readouterr().out
     assert [t.title for t in store.load().tasks] == ["cli task"]
+
+
+# --- conflict recovery: update() reapply + save_merging() three-way merge ------
+
+
+def test_update_reapplies_mutation_after_concurrent_write(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    store.init()
+    state = {"bumped": False}
+
+    def mutate(board: Board) -> str:
+        # On the first pass, simulate another writer committing after we loaded,
+        # so our save goes stale and update() must reload and reapply.
+        if not state["bumped"]:
+            other = store.load()
+            other.add_task(Task(title="concurrent"))
+            store.save(other)
+            state["bumped"] = True
+        board.add_task(Task(title="ours"))
+        return "ours"
+
+    result = store.update(mutate)
+
+    assert result == "ours"
+    titles = sorted(task.title for task in store.load().tasks)
+    assert titles == ["concurrent", "ours"]  # both landed, neither clobbered
+
+
+def test_update_raises_when_conflict_never_clears(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    store.init()
+
+    def mutate(board: Board) -> None:
+        other = store.load()
+        other.add_task(Task(title="x"))
+        store.save(other)  # bump every attempt so our save is always stale
+        board.add_task(Task(title="ours"))
+
+    with pytest.raises(StaleBoardError):
+        store.update(mutate, retries=2)
+
+
+def test_save_merging_unions_concurrent_writer(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    store.init()
+    seed = store.load()
+    seed.add_task(Task(title="A", status=TaskStatus.READY))
+    store.save(seed)
+
+    # Daemon loads, snapshots its base, advances task A (its in-flight work).
+    daemon = store.load()
+    base = Board.from_dict(daemon.to_dict())
+    daemon.tasks[0].transition(TaskStatus.DONE)
+
+    # Meanwhile a chat/UI writer adds a new task B and commits first.
+    other = store.load()
+    other.add_task(Task(title="B"))
+    store.save(other)
+
+    conflicts = store.save_merging(daemon, base)
+
+    assert conflicts == []
+    final = {task.title: task for task in store.load().tasks}
+    assert set(final) == {"A", "B"}                 # B not clobbered
+    assert final["A"].status is TaskStatus.DONE     # daemon's change kept
+
+
+def test_save_merging_recovers_base_from_event_log(tmp_path) -> None:
+    store = BoardStore(tmp_path)
+    store.init()
+    seed = store.load()
+    seed.add_task(Task(title="A", status=TaskStatus.READY))
+    store.save(seed)
+
+    daemon = store.load()                           # no explicit base snapshot
+    daemon.tasks[0].transition(TaskStatus.DONE)
+    other = store.load()
+    other.add_task(Task(title="B"))
+    store.save(other)
+
+    conflicts = store.save_merging(daemon)          # base recovered from event log
+
+    assert conflicts == []
+    final = {task.title: task for task in store.load().tasks}
+    assert set(final) == {"A", "B"}
+    assert final["A"].status is TaskStatus.DONE
