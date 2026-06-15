@@ -587,16 +587,57 @@ def _idle_resources() -> object:
     )
 
 
-def test_decide_returns_browser_brain_when_no_api_key(tmp_path, monkeypatch) -> None:
+def test_decide_local_primary_even_with_browser_configured(tmp_path, monkeypatch) -> None:
+    # Browser foundation being configured must NOT make it the default doer brain:
+    # local LM Studio is the primary workhorse; browser is the planning/escalation
+    # path reached via foundation_brain_for, not decide().
     monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
     monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
     monkeypatch.setattr("orac.model_policy.read_resource_snapshot", lambda _pct: _idle_resources())
     store = BoardStore(tmp_path)
     store.init()
     decision = ModelPolicyStore(store).decide()
-    assert decision.brain == "browser"
-    assert decision.model == "claude"
-    assert "browser foundation" in decision.reason
+    assert decision.brain == "lmstudio"
+    assert "primary path" in decision.reason
+    assert "rotated" in decision.reason  # browser noted as the reserved planning path
+
+
+def test_foundation_brain_for_rotates_providers(tmp_path, monkeypatch) -> None:
+    # The high-leverage foundation brain rotates claude -> gemini -> openai across
+    # calls so no single provider is leaned on.
+    from orac.model_policy import foundation_brain_for
+    from orac.llm import FallbackBrain
+    from orac.browser_brain import BrowserFoundationBrain
+
+    monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
+    monkeypatch.setenv("ORAC_BROWSER_FOUNDATION", "claude")
+    store = BoardStore(tmp_path)
+    store.init()
+    policy_store = ModelPolicyStore(store)
+
+    seen = []
+    for _ in range(4):
+        brain = foundation_brain_for(policy_store)
+        assert isinstance(brain, FallbackBrain)
+        assert isinstance(brain.primary, BrowserFoundationBrain)
+        seen.append(brain.primary.provider)
+    assert seen == ["claude", "gemini", "openai", "claude"]
+
+
+def test_foundation_brain_for_falls_back_to_local(tmp_path, monkeypatch) -> None:
+    # No browser, no API key: the planning call still runs, on the local workhorse.
+    from orac.model_policy import foundation_brain_for
+    from orac.llm import FallbackBrain
+    from orac.browser_brain import BrowserFoundationBrain
+
+    monkeypatch.delenv("ORAC_FOUNDATION_API_KEY", raising=False)
+    monkeypatch.delenv("ORAC_BROWSER_FOUNDATION", raising=False)
+    store = BoardStore(tmp_path)
+    store.init()
+    ModelPolicyStore(store).save_policy({"browser_foundation_provider": ""})
+    brain = foundation_brain_for(ModelPolicyStore(store))
+    assert isinstance(brain, FallbackBrain)
+    assert not isinstance(brain.primary, BrowserFoundationBrain)  # local, not browser
 
 
 def test_decide_prefers_api_key_over_browser(tmp_path, monkeypatch) -> None:

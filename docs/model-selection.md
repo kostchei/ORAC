@@ -82,18 +82,31 @@ Or set `browser_foundation_provider` in `.orac/config.json → model_policy`.
 
 **Routing behaviour**
 
-Browser foundation is used exactly where the API-key path would be used:
-origination, decomposition, and escalated sessions.  When both an API key *and*
-browser foundation are configured, the API key wins (controlled spend).  All the
-same daily-cap and escalation logic applies; browser calls aren't tracked by cost
-(they're free) so `can_escalate` returns `True` unconditionally in browser mode.
+Browser foundation is used exactly where the API-key path would be used —
+origination, decomposition planning, and escalated sessions — never as the
+default doer brain.  Local LM Studio stays the **primary** workhorse: `decide()`
+returns local even when browser foundation is configured, doer sessions and the
+fan-out children run local, and the orchestrator fans planned subtasks *out* to
+local.  Browser is the high-leverage planning/escalation seam only
+(`foundation_brain_for`).
+
+**Provider rotation.**  Enabling browser foundation (any non-empty
+`ORAC_BROWSER_FOUNDATION` / `browser_foundation_provider`) makes ORAC **rotate
+across `claude` → `gemini` → `openai`** on every foundation-routed call
+(`next_browser_provider`, a round-robin index persisted in `usage.json`).  No
+single provider is leaned on, and a per-provider outage self-heals on the next
+call.  The configured provider value is just the on/off switch; rotation always
+spans all three.  When both an API key *and* browser foundation are configured,
+the API key wins (controlled spend).  Browser calls aren't cost-tracked (they're
+free), so `can_escalate` returns `True` unconditionally in browser mode.
 
 **Reliability notes**
 
 - Chat UIs enforce rate limits.  Don't set `daemon_interval_seconds` below 60.
-- The CSS selectors in `browser_brain.py` will break when providers redesign
-  their UIs.  Update `_INPUT_SELECTORS` / `_RESPONSE_SELECTORS` if a call
-  returns empty or wrong text.
+- Selectors are externalized to `browser_selectors.json` (priority-ordered
+  candidate lists), so a provider redesign is a data edit, not a code change.
+  Run `orac browser doctor` to find which field rotted — it probes each provider
+  end to end and reports stale selectors.
 - For `think_json` calls, the schema is included as plain-text instructions in
   the prompt.  Server-side token enforcement is unavailable.  `parse_decision`
   in AgentSession still rejects malformed replies, so failures are visible rather

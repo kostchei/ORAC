@@ -407,6 +407,7 @@ def run_orchestrated_goal(
     cap: int = MAX_SUBAGENTS,
     band: float = ACTIVE_SLICE_CEILING,
     max_repairs: int = 2,
+    child_brain: Brain | None = None,
 ) -> list[Task]:
     """The full fan-out: propose a decomposition (with the abundance frame),
     review the plan (the counterweight), then dispatch each slice through the
@@ -416,6 +417,12 @@ def run_orchestrated_goal(
     ledger into one entry. A plan the review rejects does not spawn anything —
     the parent blocks with the lens reasons, a visible signal to re-plan, rather
     than running an unreviewed fan-out.
+
+    Two brains by design (docs/model-selection.md): ``brain`` is the orchestrator
+    that PROPOSES the decomposition — a high-leverage call that runs on a frontier
+    foundation model (rotated). ``child_brain`` is what the fan-out doers run on —
+    the local workhorse; the agent fans the planned subtasks OUT to local. When
+    ``child_brain`` is omitted both are the same brain (single-model callers/tests).
     """
     from orac.orchestrator import propose_decomposition  # noqa: PLC0415 (cycle)
     from orac.plan_review import review_decomposition  # noqa: PLC0415
@@ -423,6 +430,8 @@ def run_orchestrated_goal(
 
     if broker.store is None:
         raise ValueError("run_orchestrated_goal needs a store-backed broker.")
+    # The fan-out doers run local; only the proposal uses the foundation brain.
+    child_brain = child_brain or brain
 
     spec = WORK_KINDS[work_kind]
     slices_plan = propose_decomposition(
@@ -470,7 +479,10 @@ def run_orchestrated_goal(
         f"({score.slice_count} slice(s), est cost {score.estimated_cost:.2f}).",
     )
 
-    verdict = review_decomposition(intent, slices_plan, brain, task=parent)
+    # Plan review is the counterweight lens layer (ROUTING['lens'] == 'local'):
+    # judge the orchestrator's plan on the cheap local brain, not the foundation
+    # model that proposed it — an independent check, not the proposer grading itself.
+    verdict = review_decomposition(intent, slices_plan, child_brain, task=parent)
     if verdict.status is not CapabilityStatus.ALLOWED:
         parent.add_log(
             "Orchestrator",
@@ -485,7 +497,7 @@ def run_orchestrated_goal(
         f"Decomposed into {len(slices_plan)} slice(s); plan review passed.",
     )
     return run_decomposed_goal(
-        board, parent, intent, slices_plan, work_kind, brain, broker, context,
+        board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
         max_steps=max_steps, band=band, max_repairs=max_repairs,
     )
 

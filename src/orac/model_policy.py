@@ -133,22 +133,19 @@ class ModelPolicyStore:
                 foundation_remaining_today_usd=remaining,
                 resources=resources,
             )
-        provider = _browser_provider(policy)
-        if provider:
-            return ModelDecision(
-                brain="browser",
-                model=provider,
-                reason=f"browser foundation active (provider={provider}; no API key required)",
-                daily_foundation_cap_usd=daily_cap,
-                foundation_spent_today_usd=spent,
-                foundation_remaining_today_usd=remaining,
-                resources=resources,
-            )
+        # Local LM Studio is the PRIMARY workhorse path. Browser foundation is NOT
+        # the default doer brain just because it is configured: it is the
+        # fragility-reduction high-leverage brain (origination / decomposition
+        # planning / escalation), reached through foundation_brain_for and rotated
+        # across providers — never the place the bulk of the volume runs.
         model = str(policy.get("lmstudio_standard_model") or "local")
+        reason = "local LM Studio is the primary path"
+        if _has_browser_foundation(policy):
+            reason += "; browser foundation reserved for planning/escalation (rotated)"
         return ModelDecision(
             brain="lmstudio",
             model=model,
-            reason="foundation budget unavailable or exhausted; using local LM Studio",
+            reason=reason,
             daily_foundation_cap_usd=daily_cap,
             foundation_spent_today_usd=spent,
             foundation_remaining_today_usd=remaining,
@@ -210,6 +207,31 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
         return build_brain("foundation")
     policy = policy_store.load_policy()
     return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
+
+
+def foundation_brain_for(policy_store: "ModelPolicyStore") -> Any:
+    """The brain for the high-leverage 'foundation'-routed calls — origination and
+    decomposition planning (docs/model-selection.md ROUTING). These are the few
+    decisions that steer hours of local work, so they run on a frontier model:
+
+    - Browser foundation (no API key): a fresh provider each call, ROTATED across
+      claude/gemini/openai so no single provider is leaned on (and a per-provider
+      outage self-heals on the next call).
+    - An API key with budget: the paid foundation model.
+    - Neither configured: degrade to the local standard model so the call still
+      runs (the workhorse), rather than failing the planning step.
+
+    The bulk of the volume — doer sessions and the fan-out children — stays local
+    (session_brain_for); this is only the planning/origination seam.
+    """
+    from orac.llm import build_brain
+
+    policy = policy_store.load_policy()
+    if _has_browser_foundation(policy):
+        return build_brain("browser", model=next_browser_provider(policy_store))
+    if _has_foundation_key():
+        return build_brain("foundation")
+    return build_brain("lmstudio", model=str(policy.get("lmstudio_standard_model") or "local"))
 
 
 def lens_brain(policy_store: "ModelPolicyStore") -> Any:

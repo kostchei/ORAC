@@ -144,15 +144,20 @@ class Scrum:
         if self._should_decompose(task):
             from orac.work import run_orchestrated_goal
 
+            # The orchestrator that PROPOSES the fan-out runs on the rotating
+            # foundation brain (the high-leverage planning call); the fan-out
+            # doers run on the local workhorse — the agent fans subtasks out to
+            # local (docs/model-selection.md ROUTING).
             run_orchestrated_goal(
                 board=board,
                 parent=task,
                 goal=goal,
                 intent=task.description or goal,
                 work_kind=task.work_kind,
-                brain=self._session_brain(task),
+                brain=self._foundation_brain(),
                 broker=self.broker,
                 context=context,
+                child_brain=self._session_brain(task),
             )
             # run_orchestrated_goal settles the parent against the intent ledger
             # (DONE when covered, BLOCKED when a slice is); only escalation is ours.
@@ -185,6 +190,17 @@ class Scrum:
         from orac.storage import BoardStore
 
         return session_brain_for(ModelPolicyStore(BoardStore(self.root)), task)
+
+    def _foundation_brain(self) -> Brain:
+        """The brain for high-leverage 'foundation'-routed calls (origination and
+        decomposition planning): a rotating frontier model. Falls back to the
+        Scrum's own brain when model routing is off (tests / explicit --brain)."""
+        if not self.route_models:
+            return self.brain
+        from orac.model_policy import ModelPolicyStore, foundation_brain_for
+        from orac.storage import BoardStore
+
+        return foundation_brain_for(ModelPolicyStore(BoardStore(self.root)))
 
     def _maybe_escalate(self, task: Task) -> None:
         """Two local failures trigger escalation to a browser foundation provider.
@@ -236,7 +252,10 @@ class Scrum:
         from orac.driver import originate
 
         try:
-            origination = originate(board, self.store, self.brain, self.root)
+            # Origination is a high-leverage 'foundation'-routed call: form the
+            # one self-improvement goal on the rotating frontier brain, not the
+            # local workhorse (docs/model-selection.md ROUTING['origination']).
+            origination = originate(board, self.store, self._foundation_brain(), self.root)
         except ValueError as exc:
             fault = Task(
                 title="Optimise driver failed to originate",
