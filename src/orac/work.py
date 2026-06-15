@@ -137,6 +137,7 @@ def run_goal_task(
     resource_slice: float = DEFAULT_RESOURCE_SLICE,
     contract_metadata: dict[str, Any] | None = None,
     max_repairs: int = 0,
+    review_return: bool = False,
 ) -> Task:
     """Spawn the kind's doer against a goal; the model decides how.
 
@@ -238,12 +239,40 @@ def run_goal_task(
         # with red or unrun tests).
         ok, detail = verify_goal_done(spec, child, broker, context)
         if ok:
-            child.transition(TaskStatus.DONE)
-            _retire("done")
-            parent.add_log(
-                "Orchestrator",
-                f"{spec.kind} subtask {child.id} done (verified): {result.summary}",
-            )
+            # The deterministic verifier proved the work RUNS. When enabled (the
+            # orchestrated fan-out turns it on), promote the RETURN edge to a full
+            # council review: three lenses judge whether what came back is on-goal,
+            # minimally shaped, and waste-free before it integrates (rugged
+            # decomposition §13). A rejected return blocks the slice with the lens
+            # reasons rather than integrating questionable work on green tests alone.
+            review = None
+            if review_return:
+                from orac.plan_review import review_return as _review_return_edge  # noqa: PLC0415
+
+                review = _review_return_edge(
+                    goal, acceptance_criteria, result.summary, brain, task=child
+                )
+            if review is not None and review.status is not CapabilityStatus.ALLOWED:
+                child.add_log(
+                    "Council",
+                    f"RETURN review did not accept the slice "
+                    f"({review.status.value}): {review.reason}",
+                )
+                child.transition(TaskStatus.BLOCKED)
+                _retire("blocked")
+                parent.transition(TaskStatus.BLOCKED)
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} blocked by RETURN review: {review.reason}",
+                )
+            else:
+                child.transition(TaskStatus.DONE)
+                _retire("done")
+                reviewed = " + RETURN review" if review is not None else ""
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} done (verified{reviewed}): {result.summary}",
+                )
         elif max_repairs > 0:
             # Repair is a NEW focused slice (rugged decomposition §13): a child of
             # this one, visible on the board and independently verified in its own
@@ -269,6 +298,7 @@ def run_goal_task(
                 resource_slice=resource_slice,
                 contract_metadata=contract_metadata,
                 max_repairs=max_repairs - 1,
+                review_return=review_return,
             )
             if repair.status is TaskStatus.DONE:
                 # The repair verified, so this slice's goal is now met on the branch.
@@ -334,6 +364,7 @@ def run_decomposed_goal(
     resource_slice: float = DEFAULT_RESOURCE_SLICE,
     band: float = ACTIVE_SLICE_CEILING,
     max_repairs: int = 0,
+    review_return: bool = False,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
@@ -387,6 +418,7 @@ def run_decomposed_goal(
             resource_slice=resource_slice,
             contract_metadata=contract_metadata or None,
             max_repairs=max_repairs,
+            review_return=review_return,
         )
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
@@ -503,9 +535,12 @@ def run_orchestrated_goal(
         "Orchestrator",
         f"Decomposed into {len(slices_plan)} slice(s); plan review passed.",
     )
+    # The fan-out promotes the per-slice RETURN edge to a full council review on
+    # the local child brain: the deterministic verifier proves it runs, the lenses
+    # judge that what came back is on-goal and waste-free before it integrates.
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
-        max_steps=max_steps, band=band, max_repairs=max_repairs,
+        max_steps=max_steps, band=band, max_repairs=max_repairs, review_return=True,
     )
 
 

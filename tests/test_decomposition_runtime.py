@@ -198,6 +198,65 @@ def test_repair_disabled_by_default_blocks_on_first_failure(tmp_path, monkeypatc
     assert len(session.contracts) == 1              # no retry
 
 
+class _ReturnReviewBrain:
+    """A structured-output brain that rejects the RETURN edge (every lens blocks)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def think_json(self, agent, role, task, prompt, schema):
+        self.calls += 1
+        return '{"decision": "block", "reason": "returned work drifts off-goal"}'
+
+
+def test_return_review_blocks_verified_but_off_goal_work(tmp_path, monkeypatch) -> None:
+    # The deterministic verifier passes (tests green), but the RETURN council review
+    # rejects the returned work — the slice must NOT integrate on green tests alone.
+    (tmp_path / ".orac").mkdir()
+    broker = ToolBroker.from_store(BrokerStore(tmp_path).init())
+    board = Board()
+    parent = Task(title="parent", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    session = _MockSession()
+    import orac.work as work_mod
+
+    monkeypatch.setattr(work_mod, "verify_goal_done", lambda *a, **k: (True, "tests passed"))
+    monkeypatch.setattr(work_mod, "AgentSession", lambda *a, **k: session)
+
+    review_brain = _ReturnReviewBrain()
+    child = run_goal_task(
+        board, parent, goal="add a helper", acceptance_criteria=("works",),
+        work_kind="code", brain=review_brain, broker=broker,
+        context={"repo_root": str(tmp_path)}, review_return=True,
+    )
+
+    assert child.status is TaskStatus.BLOCKED            # rejected by the RETURN review
+    assert review_brain.calls == 3                       # all three lenses consulted
+    assert any("RETURN review" in log.message for log in child.work_log)
+
+
+def test_return_review_off_by_default_accepts_verified_work(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".orac").mkdir()
+    broker = ToolBroker.from_store(BrokerStore(tmp_path).init())
+    board = Board()
+    parent = Task(title="parent", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    session = _MockSession()
+    import orac.work as work_mod
+
+    monkeypatch.setattr(work_mod, "verify_goal_done", lambda *a, **k: (True, "tests passed"))
+    monkeypatch.setattr(work_mod, "AgentSession", lambda *a, **k: session)
+
+    child = run_goal_task(
+        board, parent, goal="x", acceptance_criteria=(),
+        work_kind="code", brain=None, broker=broker,
+        context={"repo_root": str(tmp_path)},  # review_return defaults to False
+    )
+    assert child.status is TaskStatus.DONE  # no review brain consulted
+
+
 # === 4. scrum routes large goals to the fan-out, small ones to one doer =======
 
 

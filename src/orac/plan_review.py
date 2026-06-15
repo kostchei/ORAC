@@ -143,3 +143,98 @@ def _parse(reply: str) -> tuple[LensDecision, str]:
     if decision is None or decision.get("decision") not in {"pass", "block", "escalate"}:
         return LensDecision.ESCALATE, f"could not produce a usable verdict: {reply[:160]!r}"
     return LensDecision(str(decision["decision"])), str(decision.get("reason", "")).strip()
+
+
+# The RETURN edge: a council review of what a slice actually delivered, on top of
+# the deterministic verifier (tests/app). The verifier proves the work RUNS; these
+# lenses judge whether what came back is on-goal, minimally shaped, and free of
+# waste before it integrates — the semantic check passing tests cannot give.
+
+_RETURN_LENSES: tuple[tuple[str, str], ...] = (
+    ("Intent", "intent"),
+    ("Simple", "simples"),
+    ("Efficiency", "efficiency"),
+)
+
+_RETURN_FOCUS: dict[str, str] = {
+    "Intent": (
+        "Does the returned work actually serve THIS slice's goal, with no drift — "
+        "did it solve the asked problem rather than a nearby different one, and "
+        "cover the acceptance criteria? Solving the wrong thing is a real problem."
+    ),
+    "Simple": (
+        "Is the result the minimal, plainest shape that meets the goal? Needless "
+        "abstraction, indirection, or moving parts added for this slice is a real "
+        "problem in your domain."
+    ),
+    "Efficiency": (
+        "Is there WASTE in what was returned — dead code, duplicated logic, "
+        "unnecessary ceremony, or scope beyond the goal? That is a real problem."
+    ),
+}
+
+_RETURN_PROTOCOL = """\
+You are ONE review lens on the WORK A SUBAGENT RETURNED for a slice (its done
+claim already passed an independent verifier — tests run green). Judge ONLY
+through your own lens's focus below. Most verified work passes — do not invent
+problems — but never rubber-stamp returned work whose problem you can name.
+
+Reply with ONE JSON object and nothing else:
+{"decision": "pass|escalate|block", "reason": "<one short sentence>"}"""
+
+
+def review_return(
+    goal: str,
+    acceptance_criteria: tuple[str, ...],
+    evidence: str,
+    brain: Brain,
+    *,
+    task: Task | None = None,
+) -> CouncilVerdict:
+    """Run the three lenses over a slice's RETURNED work and aggregate.
+
+    The deterministic verifier (run_tests / verify_local_app) has already passed;
+    this is the semantic gate before integration. Same contract and aggregation as
+    the council (block -> denied, escalate -> pending, else allowed); an unparseable
+    verdict is ESCALATE, never a silent pass. Requires a structured-output brain.
+    """
+    think_json = getattr(brain, "think_json", None)
+    if not callable(think_json):
+        raise RuntimeError(
+            "Return review requires a brain with structured output (think_json)."
+        )
+    personas = _personas()
+    seed = task or Task(title="return-review", description=goal)
+    criteria = "\n".join(f"  - {c}" for c in acceptance_criteria) or "  - (none given)"
+    verdicts: list[LensVerdict] = []
+    for name, slug in _RETURN_LENSES:
+        prompt = (
+            f"{personas[slug]}\n\n"
+            f"{_RETURN_PROTOCOL}\n\n"
+            f"YOUR LENS ({name}) FOCUS: {_RETURN_FOCUS[name]}\n\n"
+            f"SLICE GOAL: {goal}\n"
+            f"ACCEPTANCE CRITERIA:\n{criteria}\n"
+            f"RETURNED EVIDENCE:\n{evidence[:1500]}\n\n"
+            f"Your verdict as the {name} lens:"
+        )
+        reply = think_json(name, slug, seed, prompt, PLAN_REVIEW_SCHEMA)
+        decision, reason = _parse(reply)
+        verdicts.append(LensVerdict(lens=name, decision=decision, reason=f"{name}: {reason}"))
+
+    lenses = tuple(verdicts)
+    blocks = [v for v in verdicts if v.decision is LensDecision.BLOCK]
+    escalations = [v for v in verdicts if v.decision is LensDecision.ESCALATE]
+    if blocks:
+        return CouncilVerdict(
+            status=CapabilityStatus.DENIED, lenses=lenses,
+            reason="; ".join(v.reason for v in blocks),
+        )
+    if escalations:
+        return CouncilVerdict(
+            status=CapabilityStatus.PENDING, lenses=lenses,
+            reason="; ".join(v.reason for v in escalations),
+        )
+    return CouncilVerdict(
+        status=CapabilityStatus.ALLOWED, lenses=lenses,
+        reason="return review: all lenses pass",
+    )

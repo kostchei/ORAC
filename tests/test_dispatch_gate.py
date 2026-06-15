@@ -143,8 +143,8 @@ def test_orchestrated_goal_full_flow(tmp_path) -> None:
     script = (
         [_plan("a", "b")]              # propose (frame)
         + _review_pass()              # plan review (counterweight)
-        + _builder(tmp_path, "a", "build/a")
-        + _builder(tmp_path, "b", "build/b")
+        + _builder(tmp_path, "a", "build/a") + _review_pass()   # slice a + RETURN review
+        + _builder(tmp_path, "b", "build/b") + _review_pass()   # slice b + RETURN review
     )
 
     children = run_orchestrated_goal(
@@ -156,6 +156,8 @@ def test_orchestrated_goal_full_flow(tmp_path) -> None:
     assert parent.status is TaskStatus.DONE
     assert is_covered(parent)
     assert any("plan review passed" in e.message for e in parent.work_log)
+    # The RETURN edge was reviewed before each slice integrated.
+    assert any("done (verified + RETURN review)" in e.message for e in parent.work_log)
 
 
 def test_orchestrated_goal_rejected_plan_spawns_nothing(tmp_path) -> None:
