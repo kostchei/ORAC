@@ -5,14 +5,11 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
 
 from orac.broker_store import BrokerStore, Notification
 from orac.chat_config import CHANNELS, is_authorized_sender, load_chat_config
 from orac.chat_logs import CommsLog
 from orac.code_adapters import code_adapters_for
-from orac.llm import LMStudioBrain
-from orac.model_policy import ModelPolicyStore
 from orac.models import (
     CapabilityRequest,
     CapabilityResult,
@@ -32,7 +29,9 @@ approve <pending-id>
 deny <pending-id>
 ack <notification-id>
 rollback <notification-id>
-help"""
+help
+
+Any other message is taken as a new work request (a goal) — never small talk."""
 
 
 @dataclass(frozen=True)
@@ -189,7 +188,11 @@ class ChatGateway:
             return self._ack(raw)
         if lower.startswith("rollback "):
             return self._rollback(raw)
-        return self._freeform_reply(raw, message)
+        # Everything that is not one of the control commands above is a work
+        # request, never small talk: turn the raw message into a goal. (Routing by
+        # work TYPE — research, image, 3D print, encounter building — is a later
+        # refinement; today every chat goal runs as the one available doer.)
+        return self._add_goal(raw, message)
 
     def _load_or_init_board(self):
         try:
@@ -228,98 +231,6 @@ class ChatGateway:
             f"ORAC status: {stats.active} active, {stats.blocked} blocked, "
             f"{stats.done} done, {stats.backlog} backlog. {summary.message()}"
         )
-
-    def _freeform_reply(self, raw: str, message: InboundMessage) -> str:
-        lower = raw.lower()
-        if _mentions_any(lower, {"blocked", "stuck", "relevant", "relevance"}):
-            return self._naturalize(raw, self._blocked_text(), intent="blocked review")
-        if _mentions_any(lower, {"review", "approval", "pending"}):
-            return self._naturalize(raw, self._reviews_text(), intent="review queue")
-        if _mentions_any(lower, {"status", "state", "progress", "what now"}):
-            return self._naturalize(raw, self._status_text(), intent="status")
-        if _looks_like_goal_request(lower):
-            goal = _strip_goal_request(raw)
-            if goal:
-                return self._add_goal(goal, message)
-
-        context = "\n".join(
-            [
-                self._status_text(),
-                self._blocked_text(limit=3),
-                self._reviews_text(pending_limit=3, notification_limit=3),
-            ]
-        )
-        fallback = (
-            "I can answer status, reviews, and blocked-work questions in normal "
-            "language. To create work, say `goal: <what you want>` or `create task <what you want>`."
-        )
-        return self._naturalize(raw, fallback, intent="general operator question", context=context)
-
-    def _blocked_text(self, limit: int = 8) -> str:
-        board = self._load_or_init_board()
-        blocked = [task for task in board.tasks if task.status == TaskStatus.BLOCKED]
-        if not blocked:
-            return "No blocked tasks right now."
-
-        lines = ["Blocked tasks:"]
-        for task in blocked[:limit]:
-            last_log = task.work_log[-1].message if task.work_log else "No work log yet."
-            lines.append(f"[{task.id}] {task.title} - {last_log}")
-        if len(blocked) > limit:
-            lines.append(f"... {len(blocked) - limit} more blocked task(s)")
-        lines.append("I cannot decide relevance automatically; tell me which IDs to revive or ignore.")
-        return "\n".join(lines)
-
-    def _naturalize(
-        self,
-        user_text: str,
-        factual_reply: str,
-        *,
-        intent: str,
-        context: str | None = None,
-    ) -> str:
-        prompt = (
-            "Write the exact chat reply ORAC should send to the operator.\n"
-            "Use only the facts below. Do not invent task state. Do not approve, deny, "
-            "ack, rollback, delete, or change anything. Preserve ids exactly. Keep it under "
-            "90 words unless there is a list of ids.\n\n"
-            f"Operator message: {user_text}\n"
-            f"Intent: {intent}\n"
-            f"Facts:\n{context or factual_reply}\n\n"
-            f"Fallback reply if the facts are enough:\n{factual_reply}"
-        )
-        policy = ModelPolicyStore(self.store).load_policy()
-        base_url = str(policy.get("lmstudio_url") or "http://localhost:1234/v1")
-        task = Task(title="Chat operator reply", description=user_text, work_kind="comms")
-        errors: list[str] = []
-        for model in _chat_model_candidates(policy):
-            try:
-                brain = LMStudioBrain(
-                    base_url=base_url,
-                    model=model,
-                    timeout_seconds=60,
-                    max_tokens=512,
-                )
-                reply = brain.think("ORAC", "chat assistant", task, prompt).strip()
-            except Exception as exc:
-                errors.append(f"{model}: {exc}")
-                continue
-            if reply:
-                self.log.record(
-                    "llm_reply",
-                    channel="chat",
-                    intent=intent,
-                    model=model,
-                )
-                return _trim_reply(reply)
-
-        self.log.record(
-            "llm_unavailable",
-            channel="chat",
-            reason="; ".join(errors) or "empty reply",
-            intent=intent,
-        )
-        return factual_reply
 
     def _reviews_text(
         self, pending_limit: int = 8, notification_limit: int = 8
@@ -395,62 +306,3 @@ def _rollback_request(
     note: Notification, root: str, tool: str, call_args: dict[str, object]
 ) -> CapabilityRequest:
     return CapabilityRequest(agent="human", tool=tool, task_id=note.task_id, args=call_args)
-
-
-def _mentions_any(text: str, words: set[str]) -> bool:
-    return any(word in text for word in words)
-
-
-def _looks_like_goal_request(text: str) -> bool:
-    prefixes = (
-        "add goal ",
-        "add task ",
-        "create goal ",
-        "create task ",
-        "new goal ",
-        "new task ",
-        "make ",
-        "build ",
-    )
-    return text.startswith(prefixes)
-
-
-def _strip_goal_request(text: str) -> str:
-    lowered = text.lower()
-    for prefix in (
-        "add goal ",
-        "add task ",
-        "create goal ",
-        "create task ",
-        "new goal ",
-        "new task ",
-        "make ",
-        "build ",
-    ):
-        if lowered.startswith(prefix):
-            return text[len(prefix):].strip()
-    return text.strip()
-
-
-def _trim_reply(text: str, limit: int = 1800) -> str:
-    stripped = text.strip()
-    if len(stripped) <= limit:
-        return stripped
-    return stripped[: limit - 3].rstrip() + "..."
-
-
-def _chat_model_candidates(policy: dict[str, Any]) -> list[str]:
-    preferred: Iterable[str] = (
-        str(policy.get("lmstudio_code_model") or ""),
-        str(policy.get("lmstudio_small_model") or ""),
-        str(policy.get("lmstudio_standard_model") or ""),
-        "qwen3.6-35b-a3b",
-        "google/gemma-4-12b",
-    )
-    candidates: list[str] = []
-    for model in preferred:
-        model = model.strip()
-        if not model or model in {"local", "small_local"} or model in candidates:
-            continue
-        candidates.append(model)
-    return candidates or ["local-model"]

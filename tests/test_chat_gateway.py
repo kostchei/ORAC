@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from orac.broker_store import BrokerStore
 from orac.chat_config import load_chat_config, save_chat_config
-from orac.chat_gateway import ChatGateway, InboundMessage, _chat_model_candidates
-from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, Task, TaskStatus
+from orac.chat_gateway import ChatGateway, InboundMessage
+from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus, TaskStatus
 from orac.storage import BoardStore
 
 
@@ -81,44 +81,34 @@ def test_approve_deny_and_ack_route_to_broker_store(tmp_path) -> None:
     assert bstore.get_notification(note_id).acked is True
 
 
-def test_freeform_question_does_not_dump_help(tmp_path, monkeypatch) -> None:
+def test_plain_message_becomes_a_work_request(tmp_path) -> None:
     store = BoardStore(tmp_path)
     _enable(store)
-    monkeypatch.setattr(ChatGateway, "_naturalize", lambda self, raw, factual, **kw: factual)
 
-    reply = ChatGateway(tmp_path).handle(_msg("what now"))[0].text
+    reply = ChatGateway(tmp_path).handle(
+        _msg("research dragon stat blocks for the next session")
+    )[0].text
 
-    assert "ORAC chat commands" not in reply
-    assert "ORAC status:" in reply
+    assert "Added goal" in reply
+    task = store.load().tasks[0]
+    assert task.status == TaskStatus.READY
+    assert task.work_kind == "code"
+    assert task.metadata["request_type"] == "chat_goal"
+    assert task.metadata["goal"] == "research dragon stat blocks for the next session"
 
 
-def test_freeform_blocked_question_lists_blocked_tasks(tmp_path, monkeypatch) -> None:
+def test_question_shaped_message_is_still_a_goal_not_chitchat(tmp_path) -> None:
+    # No incoming message is small talk: even a question becomes a work request,
+    # not a conversational answer. The control verbs (status/reviews/approve/...)
+    # are the only exceptions, and they are matched before this fallthrough.
     store = BoardStore(tmp_path)
-    board = store.init()
-    board.add_task(Task(title="Fix WhatsApp pairing", status=TaskStatus.BLOCKED))
-    store.save(board)
     _enable(store)
-    monkeypatch.setattr(ChatGateway, "_naturalize", lambda self, raw, factual, **kw: factual)
 
-    reply = ChatGateway(tmp_path).handle(_msg("are the blocked tasks still relevant?"))[0].text
+    reply = ChatGateway(tmp_path).handle(_msg("can you tidy up the blocked tasks?"))[0].text
 
-    assert "Blocked tasks:" in reply
-    assert "Fix WhatsApp pairing" in reply
+    assert "Added goal" in reply
     assert "ORAC chat commands" not in reply
-
-
-def test_chat_model_candidates_prefer_reasoning_then_small() -> None:
-    policy = {
-        "lmstudio_code_model": "qwen3.6-35b-a3b",
-        "lmstudio_small_model": "google/gemma-4-12b",
-        "lmstudio_standard_model": "mistral-small-3.1-24b-instruct-2503",
-    }
-
-    assert _chat_model_candidates(policy)[:3] == [
-        "qwen3.6-35b-a3b",
-        "google/gemma-4-12b",
-        "mistral-small-3.1-24b-instruct-2503",
-    ]
+    assert store.load().tasks[0].metadata["request_type"] == "chat_goal"
 
 
 def test_gateway_writes_comms_message_log(tmp_path) -> None:
