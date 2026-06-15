@@ -53,6 +53,10 @@ class SliceContract:
     expected_artifact: str | None = None
     return_evidence: tuple[str, ...] = ()
     integration_note: str | None = None
+    # When true, this slice is itself large enough to fan out again rather than
+    # run as a single doer. Recursion is bounded by max_depth and the global
+    # subagent roster cap (a full roster defers the deeper spawn).
+    decompose: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -75,6 +79,8 @@ class SliceContract:
             data["expected_artifact"] = self.expected_artifact
         if self.integration_note is not None:
             data["integration_note"] = self.integration_note
+        if self.decompose:
+            data["decompose"] = True
         return data
 
     @classmethod
@@ -111,6 +117,7 @@ class SliceContract:
             expected_artifact=_optional_str(data.get("expected_artifact")),
             return_evidence=_as_tuple(data.get("return_evidence", ())),
             integration_note=_optional_str(data.get("integration_note")),
+            decompose=bool(data.get("decompose", False)),
         )
 
 

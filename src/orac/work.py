@@ -365,6 +365,9 @@ def run_decomposed_goal(
     band: float = ACTIVE_SLICE_CEILING,
     max_repairs: int = 0,
     review_return: bool = False,
+    plan_brain: Brain | None = None,
+    depth: int = 0,
+    max_depth: int = 2,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
@@ -404,22 +407,68 @@ def run_decomposed_goal(
             for key in ("allowed_tools", "forbidden_tools", "owned_paths_or_resources")
             if key in slice_
         }
-        child = run_goal_task(
-            board=board,
-            parent=parent,
-            goal=slice_["goal"],
-            acceptance_criteria=tuple(slice_["acceptance_criteria"]),
-            work_kind=work_kind,
-            brain=brain,
-            broker=broker,
-            context={**context, **dict(slice_.get("inputs", {}) or {})},
-            max_steps=max_steps,
-            intent=slice_["sub_intent"],
-            resource_slice=resource_slice,
-            contract_metadata=contract_metadata or None,
-            max_repairs=max_repairs,
-            review_return=review_return,
+        slice_context = {**context, **dict(slice_.get("inputs", {}) or {})}
+
+        # Subagent recursion (rugged decomposition §13): a slice flagged
+        # ``decompose`` is itself large enough to fan out again rather than run as a
+        # single doer. Bounded two ways — by ``max_depth`` and by the global roster
+        # cap (subagent_free_slots), so a full roster simply runs the slice as one
+        # doer instead of nesting deeper. The sub-fan-out plans on the foundation
+        # brain (plan_brain) and runs its own children on the local brain.
+        recurse = (
+            bool(slice_.get("decompose"))
+            and depth < max_depth
+            and broker.store is not None
+            and broker.store.subagent_free_slots(MAX_SUBAGENTS) > 1
         )
+        if recurse:
+            child = Task(
+                title=f"[decompose] {slice_['goal']}",
+                description=slice_["goal"],
+                parent_id=parent.id,
+                status=TaskStatus.IN_PROGRESS,
+                acceptance_criteria=list(slice_.get("acceptance_criteria", [])),
+                metadata={"goal": slice_["goal"]},
+            )
+            child.work_kind = work_kind
+            board.add_task(child)
+            parent.add_log(
+                "Orchestrator",
+                f"Slice {slice_['sub_intent']!r} re-decomposed (depth {depth + 1}).",
+            )
+            run_orchestrated_goal(
+                board=board,
+                parent=child,
+                goal=slice_["goal"],
+                intent=slice_["sub_intent"],
+                work_kind=work_kind,
+                brain=plan_brain or brain,
+                broker=broker,
+                context=slice_context,
+                max_steps=max_steps,
+                band=band,
+                max_repairs=max_repairs,
+                child_brain=brain,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+        else:
+            child = run_goal_task(
+                board=board,
+                parent=parent,
+                goal=slice_["goal"],
+                acceptance_criteria=tuple(slice_["acceptance_criteria"]),
+                work_kind=work_kind,
+                brain=brain,
+                broker=broker,
+                context=slice_context,
+                max_steps=max_steps,
+                intent=slice_["sub_intent"],
+                resource_slice=resource_slice,
+                contract_metadata=contract_metadata or None,
+                max_repairs=max_repairs,
+                review_return=review_return,
+            )
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
             mark(parent, child.id, SLICE_SATISFIED)
@@ -447,6 +496,8 @@ def run_orchestrated_goal(
     band: float = ACTIVE_SLICE_CEILING,
     max_repairs: int = 2,
     child_brain: Brain | None = None,
+    depth: int = 0,
+    max_depth: int = 2,
 ) -> list[Task]:
     """The full fan-out: propose a decomposition (with the abundance frame),
     review the plan (the counterweight), then dispatch each slice through the
@@ -541,6 +592,7 @@ def run_orchestrated_goal(
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
         max_steps=max_steps, band=band, max_repairs=max_repairs, review_return=True,
+        plan_brain=brain, depth=depth, max_depth=max_depth,
     )
 
 

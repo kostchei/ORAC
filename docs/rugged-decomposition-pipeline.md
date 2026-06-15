@@ -209,10 +209,18 @@ integrate.
   sets an explicit `decompose` flag; otherwise one doer owns it. Structural signals,
   no string-sniffing.
 
-**Still open:**
+**Closed (2026-06-15):**
 
-- Promote the per-slice RETURN edge to a full council review (today it is the
-  deterministic `verify_goal_done` floor + the repair loop).
-- Make repair a *new focused slice* rather than an in-place re-run, so the repair is
-  itself contract-bounded and reviewable.
-- Let subagents recurse (the register cap already bounds depth globally).
+- **Repair is a new focused slice**, not an in-place re-run. A verification failure
+  spawns a contract-bounded, board-visible repair child of the failed slice, carrying
+  the exact failure and inheriting its scope; it is independently verified, and a
+  repair that itself fails chains one more bounded repair (`run_goal_task` recursion).
+- **The per-slice RETURN edge gets a full council review** (`plan_review.review_return`)
+  on top of the deterministic verifier: three lenses judge the returned work is
+  on-goal, minimal, and waste-free before it integrates; a rejected return blocks the
+  slice. Opt-in (`run_goal_task(review_return=...)`); the fan-out turns it on, on the
+  local child brain.
+- **Subagents recurse.** A slice flagged `decompose` fans out again via a nested
+  `run_orchestrated_goal`, bounded by `max_depth` *and* the global roster cap (a full
+  roster runs the slice as a single doer instead of nesting). The sub-fan-out plans on
+  the foundation brain and runs its children on local.

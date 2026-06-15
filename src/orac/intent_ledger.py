@@ -33,6 +33,7 @@ _SLICE_EXTRA_KEYS = (
     "expected_artifact",
     "return_evidence",
     "integration_note",
+    "decompose",
 )
 
 # A slice is one piece of the decomposed intent, mapped to one child task.

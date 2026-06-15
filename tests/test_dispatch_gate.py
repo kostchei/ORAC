@@ -160,6 +160,66 @@ def test_orchestrated_goal_full_flow(tmp_path) -> None:
     assert any("done (verified + RETURN review)" in e.message for e in parent.work_log)
 
 
+def test_subagent_recursion_fans_out_a_flagged_slice(tmp_path) -> None:
+    # A slice flagged `decompose` is itself fanned out (a sub-parent with its own
+    # plan/review/leaf) rather than run as a single doer — bounded recursion.
+    broker, store = _repo(tmp_path)
+    board = Board()
+    parent = Task(title="big goal", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    top_plan = json.dumps({"slices": [
+        {"sub_intent": "big", "goal": "add big",
+         "acceptance_criteria": ["ok"], "decompose": True},
+    ]})
+    sub_plan = json.dumps({"slices": [
+        {"sub_intent": "leaf", "goal": "add leaf", "acceptance_criteria": ["ok"]},
+    ]})
+    script = (
+        [top_plan] + _review_pass()                                # top: propose + plan review
+        + [sub_plan] + _review_pass()                              # recursive: propose + plan review
+        + _builder(tmp_path, "leaf", "build/leaf") + _review_pass()  # leaf build + RETURN review
+    )
+
+    children = run_orchestrated_goal(
+        board, parent, "build a big thing", "deliver the big thing",
+        "code", OrchestratedBrain(script), broker, {"repo_root": str(tmp_path)},
+    )
+
+    assert len(children) == 1
+    sub_parent = children[0]
+    assert sub_parent.title.startswith("[decompose]")   # fanned out, not a single doer
+    assert sub_parent.status is TaskStatus.DONE
+    assert parent.status is TaskStatus.DONE
+    assert is_covered(parent)
+    leaves = [t for t in board.tasks if t.parent_id == sub_parent.id]
+    assert leaves and any(t.status is TaskStatus.DONE for t in leaves)
+
+
+def test_recursion_respects_max_depth(tmp_path) -> None:
+    # At max depth a flagged slice runs as a single doer instead of nesting deeper.
+    broker, store = _repo(tmp_path)
+    board = Board()
+    parent = Task(title="leaf only", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    decomposition = [
+        {"sub_intent": "x", "goal": "add x", "acceptance_criteria": ["ok"], "decompose": True},
+    ]
+    script = _builder(tmp_path, "x", "build/x") + _review_pass()  # one doer + RETURN review only
+
+    children = run_decomposed_goal(
+        board, parent, "deliver x", decomposition, "code",
+        OrchestratedBrain(script), broker, {"repo_root": str(tmp_path)},
+        review_return=True, depth=2, max_depth=2,  # already at the depth bound
+    )
+
+    assert len(children) == 1
+    # ran as a single doer slice, not a re-decomposed sub-parent
+    assert not children[0].title.startswith("[decompose]")
+    assert children[0].status is TaskStatus.DONE
+
+
 def test_orchestrated_goal_rejected_plan_spawns_nothing(tmp_path) -> None:
     broker, store = _repo(tmp_path)
     board = Board()
