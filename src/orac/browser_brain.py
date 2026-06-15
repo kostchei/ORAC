@@ -15,6 +15,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from orac.browser_primitive import BrowserPrimitiveError
+from orac.browser_selectors import ProviderSelectors, load_provider_selectors
 from orac.models import Task
 
 # Windows chrome/edge candidates (checked in order when PATH lookup fails).
@@ -102,68 +103,43 @@ def _check_provider_error(provider: str, text: str) -> None:
             raise error_cls(provider, match.group(0))
 
 
-_PROVIDER_URLS: dict[str, str] = {
-    "claude": "https://claude.ai/new",
-    "gemini": "https://gemini.google.com/app",
-    "openai": "https://chatgpt.com",
-}
+# Selectors are externalized to browser_selectors.json (a provider redesign is a
+# data edit, not a code change). Each of input/send/stop is a priority-ordered
+# list of candidates; the first that matches the live DOM wins. `orac browser
+# doctor` reports which field has rotted.
 
-# The editable text-entry area for each provider.
-_INPUT_SELECTORS: dict[str, str] = {
-    # ProseMirror div with role=textbox; class "tiptap ProseMirror" confirmed live.
-    "claude": 'div.ProseMirror[role="textbox"]',
-    # Quill editor inside Google's <rich-textarea> custom element.
-    "gemini": 'rich-textarea .ql-editor[contenteditable="true"]',
-    # ProseMirror div with stable id; also has class "ProseMirror".
-    "openai": '#prompt-textarea',
-}
 
-# The submit button for each provider.
-# Claude and Gemini both use aria-label="Send message".
-# ChatGPT uses data-testid="send-button".
-_SEND_BUTTON_SELECTORS: dict[str, str] = {
-    "claude": 'button[aria-label="Send message"]',
-    "gemini": 'button[aria-label="Send message"]',
-    "openai": '[data-testid="send-button"]',
-}
+def _provider(name: str) -> ProviderSelectors:
+    providers = load_provider_selectors()
+    sel = providers.get(name)
+    if sel is None:
+        raise ValueError(
+            f"Unknown browser foundation provider: {name!r}. "
+            f"Expected one of: {', '.join(providers)}"
+        )
+    return sel
 
-# The container element for the last AI response turn.
-_RESPONSE_SELECTORS: dict[str, str] = {
-    # Class confirmed: "font-claude-response …"
-    "claude": '[class*="font-claude-response"]',
-    # Angular custom element; contains <message-content> for the actual prose.
-    "gemini": 'model-response',
-    # data-message-author-role="assistant" on each turn div.
-    "openai": '[data-message-author-role="assistant"]',
-}
 
-# Selector that is present WHILE streaming and absent when the response is
-# complete.  None = lean on the stop-button signal + text stability.
-_STREAMING_SELECTORS: dict[str, str | None] = {
-    # data-is-streaming on Claude's response element. It MUST match the value, not
-    # just presence: when the turn finishes the attribute persists as
-    # data-is-streaming="false", so a bare [data-is-streaming] presence selector
-    # reads "streaming forever" and the turn never completes (verified against the
-    # live DOM 2026-06-15). [data-is-streaming="true"] is present only while typing.
-    "claude": '[data-is-streaming="true"]',
-    # Gemini has no reliable streaming attribute — use the stop button + stability.
-    "gemini": None,
-    # ChatGPT adds class "result-streaming" to the prose div while generating.
-    "openai": '.result-streaming',
-}
+def _wait_for_first(page: Any, candidates: tuple[str, ...], timeout_ms: int) -> Any:
+    """Return the first candidate selector's element to appear within the budget.
 
-# The "stop generating" button: present ONLY while the model is producing a
-# response, gone the instant it finishes (the universal stop->send toggle every
-# provider chat UI has). An independent completion signal that does not depend on
-# a per-provider streaming attribute, so it covers Gemini (which lacks one) and
-# reinforces the others. Best-effort: a selector that never matches simply makes
-# this a no-op and the streaming/stability signals still gate completion — a wrong
-# value cannot cause a premature "done", only forgo the extra confirmation.
-_STOP_BUTTON_SELECTORS: dict[str, str | None] = {
-    "claude": 'button[aria-label="Stop response"]',
-    "gemini": 'button[aria-label="Stop response"]',
-    "openai": 'button[data-testid="stop-button"]',
-}
+    Tries the candidates in priority order, splitting the budget across them. If
+    NONE appear it re-raises the last TimeoutError — a loud miss the caller turns
+    into BrowserLoginRequired or a diagnostic, never a silent skip.
+    """
+    per = max(1_000, timeout_ms // max(1, len(candidates)))
+    last_exc: Exception = TimeoutError(f"none of {candidates} appeared")
+    for candidate in candidates:
+        try:
+            return page.wait_for_selector(candidate, timeout=per)
+        except (TimeoutError, Exception) as exc:  # noqa: BLE001 — try next candidate
+            last_exc = exc
+    raise last_exc
+
+
+def _any_present(page: Any, candidates: tuple[str, ...]) -> bool:
+    """True if any presence-check candidate (streaming / stop) currently matches."""
+    return any(page.query_selector_all(candidate) for candidate in candidates)
 
 
 def _open_browser_page(cdp_url: str, *, timeout: float = 30.0) -> Any:
@@ -212,6 +188,13 @@ class BrowserFoundationBrain:
     timeout_seconds: int = 120
     stabilise_seconds: float = 3.0
     poll_interval: float = 1.0  # set to 0 in tests
+    # When set, a screenshot + DOM snapshot is written here on a locator miss
+    # (no input / no response / incomplete turn) so an unattended failure is
+    # diagnosable after the fact. None disables capture (the default; tests and
+    # callers that don't want files on disk leave it unset).
+    diagnostics_dir: str | None = field(
+        default_factory=lambda: os.environ.get("ORAC_BROWSER_DIAGNOSTICS") or None
+    )
 
     # Brain interface ----------------------------------------------------------
 
@@ -273,42 +256,67 @@ class BrowserFoundationBrain:
                 "Start Chrome with: chrome --remote-debugging-port=9222 --no-first-run"
             ) from exc
 
+    def _capture_diagnostics(self, page: Any, label: str) -> str | None:
+        """Best-effort screenshot + DOM snapshot of a failing page.
+
+        A locator miss on an unattended run is otherwise undiagnosable: the loop
+        sees a typed error but no one saw the screen. When ``diagnostics_dir`` is
+        set we write a PNG (CDP Page.captureScreenshot) and the page HTML so the
+        operator — or `orac browser doctor` — can see what the DOM actually looked
+        like. Capture failure must never mask the original error, so everything
+        here is swallowed and returns None.
+        """
+        if not self.diagnostics_dir:
+            return None
+        try:
+            out_dir = Path(self.diagnostics_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            base = out_dir / f"{stamp}-{label}"
+            shot = page._session.call("Page.captureScreenshot", {"format": "png"})
+            data = shot.get("data") if isinstance(shot, dict) else None
+            if data:
+                import base64 as _b64  # noqa: PLC0415
+                base.with_suffix(".png").write_bytes(_b64.b64decode(data))
+            html = page._session.evaluate("document.documentElement.outerHTML")
+            base.with_suffix(".html").write_text(str(html or ""), encoding="utf-8")
+            return str(base)
+        except Exception:  # noqa: BLE001 — diagnostics are best-effort
+            return None
+
     def _chat(self, page: Any, text: str) -> str:
-        url = _PROVIDER_URLS.get(self.provider)
-        if url is None:
-            raise ValueError(
-                f"Unknown browser foundation provider: {self.provider!r}. "
-                f"Expected one of: {', '.join(_PROVIDER_URLS)}"
-            )
+        sel = _provider(self.provider)
+        url = sel.url
 
         page.goto(url, wait_until="networkidle", timeout=30_000)
 
         # --- Phase 0: count existing response elements before submission ------
-        response_sel = _RESPONSE_SELECTORS[self.provider]
+        response_sel = sel.response
         before_count = len(page.query_selector_all(response_sel))
 
         # --- Phase 1: type and submit -----------------------------------------
-        input_sel = _INPUT_SELECTORS[self.provider]
         try:
-            inp = page.wait_for_selector(input_sel, timeout=15_000)
-        except TimeoutError as exc:
-            # No chat input: the provider redirected us to a login wall. We are
-            # already navigated there, so bring that tab to the front — the login
-            # is now 'popped' in the ORAC browser window — and raise an explicit,
+            inp = _wait_for_first(page, sel.input, timeout_ms=15_000)
+        except (TimeoutError, Exception) as exc:  # noqa: BLE001
+            # No chat input matched any candidate: the provider redirected us to a
+            # login wall (or every input selector rotted). We are already navigated
+            # there, so bring that tab to the front — the login is now 'popped' in
+            # the ORAC browser window — capture a diagnostic, and raise an explicit,
             # actionable signal instead of an opaque timeout the loop would retry.
             try:
                 page._session.call("Page.bringToFront")
             except Exception:  # noqa: BLE001 — surfacing login matters more than focus
                 pass
+            self._capture_diagnostics(page, f"{self.provider}-no-input")
             raise BrowserLoginRequired(self.provider, url) from exc
         inp.click()
         page.keyboard.press("Control+a")
         page.keyboard.type(text, delay=5)
 
-        # Click the send button if visible; fall back to Enter.
-        send_sel = _SEND_BUTTON_SELECTORS[self.provider]
+        # Click the first send button that appears; fall back to Enter only when
+        # none of the send candidates resolve (some composers submit on Enter).
         try:
-            send_btn = page.wait_for_selector(send_sel, timeout=5_000)
+            send_btn = _wait_for_first(page, sel.send, timeout_ms=5_000)
             send_btn.click()
         except Exception:  # noqa: BLE001
             page.keyboard.press("Enter")
@@ -321,28 +329,27 @@ class BrowserFoundationBrain:
             if len(page.query_selector_all(response_sel)) > before_count:
                 break
         else:
+            self._capture_diagnostics(page, f"{self.provider}-no-response")
             raise TimeoutError(
                 f"Browser foundation timed out after {self.timeout_seconds}s "
                 f"waiting for {self.provider!r} to start responding."
             )
 
         # --- Phase 3: wait for the response to actually finish ----------------
-        # Done only when NO independent signal still says "in progress": the
-        # streaming attribute is gone (if the provider has one), the stop-generating
-        # button is gone, AND the text has held still for `stabilise_seconds`.
+        # Done only when NO independent signal still says "in progress": no
+        # streaming candidate matches (if the provider has one), no stop-generating
+        # button is present, AND the text has held still for `stabilise_seconds`.
         # Requiring all three is a conjunction for correctness — it stops a brief
         # mid-generation pause from being mistaken for completion (the failure mode
         # of the old text-stability-only path for Gemini), not a fallback that
         # masks a failure.
-        streaming_sel = _STREAMING_SELECTORS[self.provider]
-        stop_sel = _STOP_BUTTON_SELECTORS.get(self.provider)
         last_text = ""
         last_change_at = time.monotonic()
         while time.monotonic() < deadline:
             if self.poll_interval > 0:
                 time.sleep(self.poll_interval)
-            streaming = bool(page.query_selector_all(streaming_sel)) if streaming_sel else False
-            generating = bool(page.query_selector_all(stop_sel)) if stop_sel else False
+            streaming = _any_present(page, sel.streaming)
+            generating = _any_present(page, sel.stop)
             els = page.query_selector_all(response_sel)
             current = els[-1].inner_text() if els else ""
             if current != last_text:
@@ -352,6 +359,7 @@ class BrowserFoundationBrain:
             if not streaming and not generating and text_stable:
                 break
         else:
+            self._capture_diagnostics(page, f"{self.provider}-incomplete")
             raise TimeoutError(
                 f"Browser foundation timed out after {self.timeout_seconds}s "
                 f"waiting for {self.provider!r} response to complete."
@@ -366,10 +374,10 @@ class BrowserFoundationBrain:
             )
         last_el = els[-1]
 
-        # Gemini: the actual prose lives inside <message-content>.
+        # Some providers (Gemini) nest the actual prose in an inner element.
         text = ""
-        if self.provider == "gemini":
-            inner = last_el.query_selector("message-content")
+        if sel.response_inner:
+            inner = last_el.query_selector(sel.response_inner)
             if inner:
                 text = inner.inner_text().strip()
         if not text:
@@ -471,16 +479,14 @@ def provider_login_ready(provider: str, cdp_url: str, *, settle: float = 3.0) ->
     Read-only: navigates the ORAC browser to the provider and checks for the
     input box. A login wall has no input, so this returns False.
     """
-    sel = _INPUT_SELECTORS.get(provider)
-    url = _PROVIDER_URLS.get(provider)
-    if sel is None or url is None:
-        raise ValueError(f"Unknown browser foundation provider: {provider!r}.")
+    sel = _provider(provider)
     try:
         with _open_browser_page(cdp_url, timeout=30.0) as page:
-            page.goto(url)
+            page.goto(sel.url)
             time.sleep(settle)
-            return bool(
-                page._session.evaluate(f"!!document.querySelector({json.dumps(sel)})")
+            return any(
+                bool(page._session.evaluate(f"!!document.querySelector({json.dumps(c)})"))
+                for c in sel.input
             )
     except (BrowserPrimitiveError, OSError, URLError):
         return False
@@ -496,7 +502,7 @@ def pop_provider_login(provider: str, cdp_url: str, *, settle: float = 3.0) -> b
     """
     if provider_login_ready(provider, cdp_url, settle=settle):
         return True
-    url = _PROVIDER_URLS[provider]
+    url = _provider(provider).url
     try:
         with _open_browser_page(cdp_url, timeout=30.0) as page:
             page.goto(url)
@@ -507,6 +513,103 @@ def pop_provider_login(provider: str, cdp_url: str, *, settle: float = 3.0) -> b
     except (BrowserPrimitiveError, OSError, URLError):
         pass
     return False
+
+
+def _field_counts(page: Any, candidates: tuple[str, ...]) -> list[tuple[str, int]]:
+    """For each candidate selector, how many elements it currently matches."""
+    counts: list[tuple[str, int]] = []
+    for candidate in candidates:
+        n = page._session.evaluate(
+            f"document.querySelectorAll({json.dumps(candidate)}).length"
+        )
+        counts.append((candidate, int(n or 0)))
+    return counts
+
+
+def browser_doctor(
+    provider: str,
+    cdp_url: str = "http://localhost:9222",
+    *,
+    probe: bool = True,
+    settle: float = 3.0,
+) -> dict[str, Any]:
+    """Health-check one provider's selectors against the live DOM.
+
+    Reports, per field, which candidate currently matches (so a human sees which
+    selector rotted), whether the session is logged in, and — when logged in and
+    ``probe`` is on — the result of a real one-word round trip through the brain.
+    The probe is what actually exercises the response/streaming/stop selectors
+    (idle, they legitimately match nothing); a green field report with a failing
+    probe pinpoints completion-path rot. The doctor never raises: it returns the
+    fault so an operator or a cron can read it.
+    """
+    sel = _provider(provider)
+    report: dict[str, Any] = {
+        "provider": provider, "url": sel.url, "fields": {}, "login_ready": None,
+        "probe": None, "error": None,
+    }
+    try:
+        with _open_browser_page(cdp_url, timeout=30.0) as page:
+            page.goto(sel.url)
+            time.sleep(settle)
+            report["fields"] = {
+                "input": _field_counts(page, sel.input),
+                "send": _field_counts(page, sel.send),
+                "response": _field_counts(page, (sel.response,)),
+                "streaming": _field_counts(page, sel.streaming),
+                "stop": _field_counts(page, sel.stop),
+            }
+            report["login_ready"] = any(n for _, n in report["fields"]["input"])
+    except (BrowserPrimitiveError, OSError, URLError) as exc:
+        report["error"] = f"cannot reach browser/CDP at {cdp_url}: {exc}"
+        return report
+
+    if probe and report["login_ready"]:
+        brain = BrowserFoundationBrain(provider=provider, cdp_url=cdp_url, timeout_seconds=90)
+        start = time.monotonic()
+        try:
+            reply = brain.think(
+                "doctor", "doer", Task(title="browser doctor probe"),
+                "Reply with exactly one word: ok",
+            )
+            report["probe"] = {
+                "ok": bool(reply.strip()), "elapsed_s": round(time.monotonic() - start, 1),
+                "reply": reply.strip()[:60],
+            }
+        except Exception as exc:  # noqa: BLE001 — the doctor reports faults, never raises
+            report["probe"] = {
+                "ok": False, "elapsed_s": round(time.monotonic() - start, 1),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    return report
+
+
+def format_doctor_report(report: dict[str, Any]) -> str:
+    """Render a browser_doctor result as an operator-facing text block."""
+    lines = [f"browser doctor — {report['provider']} ({report['url']})"]
+    if report.get("error"):
+        lines.append(f"  ERROR: {report['error']}")
+        return "\n".join(lines)
+    login = report.get("login_ready")
+    lines.append(f"  login: {'ready' if login else 'NOT logged in (sign in, then re-run)'}")
+    for field_name, counts in report.get("fields", {}).items():
+        matched = [f"{c} ({n})" for c, n in counts if n]
+        if matched:
+            lines.append(f"  {field_name:9}: {matched[0]}")
+        elif field_name == "input" and not login:
+            lines.append(f"  {field_name:9}: — (login wall)")
+        else:
+            # send/response/streaming/stop don't exist on an idle composer; the
+            # probe is what proves them. Only a failed probe means "stale".
+            lines.append(f"  {field_name:9}: none idle (exercised by probe)")
+    probe = report.get("probe")
+    if probe is None:
+        lines.append("  probe: skipped (not logged in)")
+    elif probe.get("ok"):
+        lines.append(f"  probe: OK in {probe['elapsed_s']}s -> {probe.get('reply')!r}")
+    else:
+        lines.append(f"  probe: FAILED in {probe['elapsed_s']}s -> {probe.get('error')}")
+    return "\n".join(lines)
 
 
 def ensure_browser_foundation_ready(

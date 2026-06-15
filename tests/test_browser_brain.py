@@ -23,16 +23,18 @@ from orac.storage import BoardStore
 # Browser primitive mock helpers
 # ---------------------------------------------------------------------------
 
-# Selectors that signal "still generating"; absent = the turn has finished.
-# Claude's must match the value: the attribute persists as "false" when done.
-_STREAMING_SELS = {'[data-is-streaming="true"]', ".result-streaming"}
-# Stop-generating buttons: absent = no longer generating (the stop->send toggle).
-_STOP_SELS = {
-    'button[aria-label="Stop response"]',
-    'button[data-testid="stop-button"]',
+# The "in progress" indicators (streaming attribute + stop-generating buttons)
+# are derived straight from the externalized config, so the mock stays in sync
+# when selectors change. They read as ABSENT in the default mock, i.e. the model
+# has finished — completion is gated by these plus text stability.
+from orac.browser_selectors import load_provider_selectors as _load_sels
+
+_STREAMING_SELS = {
+    s for p in _load_sels().values() for s in p.streaming
 }
-# Both classes of "in progress" indicator read as absent in the default mock,
-# i.e. the model has finished — completion is gated by these plus text stability.
+_STOP_SELS = {
+    s for p in _load_sels().values() for s in p.stop
+}
 _DONE_SELS = _STREAMING_SELS | _STOP_SELS
 
 
@@ -196,7 +198,9 @@ def test_send_button_fallback_to_enter_when_not_found(monkeypatch) -> None:
 
     def wfs(selector: str, **kw: object) -> object:
         call_n[0] += 1
-        if "Send message" in selector or "send-button" in selector:
+        # Reject every send-button candidate (priority list) so the brain must
+        # fall through to Enter; input candidates contain neither token.
+        if "Send" in selector or "submit" in selector:
             raise Exception("element not found")
         return MagicMock()
 
@@ -309,6 +313,114 @@ def test_completion_waits_for_stop_button_to_disappear(monkeypatch) -> None:
     result = brain.think("builder", "doer", task, "hi")
     assert result == "answer"
     assert state["stop"] >= 3, "completion did not wait for the stop button to vanish"
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: externalized selectors, multi-candidate locator, doctor, diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_provider_selectors_load_and_validate() -> None:
+    from orac.browser_selectors import load_provider_selectors
+
+    providers = load_provider_selectors()
+    assert {"claude", "gemini", "openai"} <= set(providers)
+    claude = providers["claude"]
+    # Comment/metadata keys (leading underscore) are ignored, not loaded.
+    assert "_comment" not in providers and "_verified" not in providers
+    # Each input/send field is a non-empty priority list; streaming matches by value.
+    assert claude.input and claude.send
+    assert claude.streaming == ('[data-is-streaming="true"]',)
+
+
+def test_malformed_selector_config_fails_loud(tmp_path) -> None:
+    from orac.browser_selectors import load_provider_selectors
+
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"claude": {"url": "x", "send": ["s"], "response": "r"}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="missing 'input'"):
+        load_provider_selectors(str(bad))
+
+
+def test_input_falls_through_to_second_candidate(monkeypatch) -> None:
+    # The first input candidate is gone; the locator must try the next in priority
+    # order rather than declaring a login wall.
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    from orac.browser_selectors import load_provider_selectors
+
+    first, second = load_provider_selectors()["claude"].input[:2]
+    page = _make_page(response_el_text="ok", provider="claude")
+    tried: list[str] = []
+
+    def wfs(selector: str, **kw: object) -> object:
+        tried.append(selector)
+        if selector == first:
+            raise TimeoutError("first input candidate gone")
+        return MagicMock()
+
+    page.wait_for_selector.side_effect = wfs
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    assert brain.think("builder", "doer", task, "hi") == "ok"
+    assert first in tried and second in tried
+
+
+def test_diagnostics_capture_on_login_wall(tmp_path, monkeypatch) -> None:
+    # With diagnostics_dir set, a no-input login wall writes a screenshot + DOM.
+    page = _make_page(provider="claude")
+    page.wait_for_selector.side_effect = TimeoutError("no input box")
+    page._session.call.return_value = {"data": "aGk="}  # base64 "hi"
+    page._session.evaluate.return_value = "<html>snapshot</html>"
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+
+    brain = BrowserFoundationBrain(
+        provider="claude", stabilise_seconds=0, poll_interval=0,
+        diagnostics_dir=str(tmp_path),
+    )
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    with pytest.raises(bb.BrowserLoginRequired):
+        brain.think("builder", "doer", task, "hi")
+
+    written = list(tmp_path.iterdir())
+    assert any(p.suffix == ".png" for p in written), "no screenshot captured"
+    assert any(p.suffix == ".html" for p in written), "no DOM snapshot captured"
+
+
+def test_diagnostics_off_by_default(tmp_path, monkeypatch) -> None:
+    page = _make_page(provider="claude")
+    page.wait_for_selector.side_effect = TimeoutError("no input box")
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    monkeypatch.delenv("ORAC_BROWSER_DIAGNOSTICS", raising=False)
+
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    assert brain.diagnostics_dir is None
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    with pytest.raises(bb.BrowserLoginRequired):
+        brain.think("builder", "doer", task, "hi")
+    assert not list(tmp_path.iterdir()), "diagnostics written despite being disabled"
+
+
+def test_browser_doctor_reports_stale_when_logged_out(monkeypatch) -> None:
+    # Logged-out provider: input matches nothing, probe is skipped, report renders.
+    page = MagicMock()
+    page._session.evaluate.return_value = 0  # no selector matches anything
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+
+    report = bb.browser_doctor("claude", "http://localhost:9222", probe=False, settle=0)
+    assert report["login_ready"] is False
+    assert report["probe"] is None
+    text = bb.format_doctor_report(report)
+    assert "NOT logged in" in text
+
+
+def test_browser_doctor_unreachable_is_reported_not_raised(monkeypatch) -> None:
+    def boom(*_a: object, **_k: object):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(bb, "_open_browser_page", boom)
+    report = bb.browser_doctor("claude", "http://localhost:9222", probe=False, settle=0)
+    assert report["error"] and "cannot reach" in report["error"]
+    assert "ERROR" in bb.format_doctor_report(report)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,33 @@
+{
+  "_comment": "Externalized provider chat-UI selectors. A break is a data edit here, not a code change. Each of input/send/stop is a PRIORITY-ORDERED list: the first candidate that matches wins; if NONE match the call fails loud (no silent degradation). Prefer stable anchors (ARIA role/label, data-testid) over class fragments. `streaming` is an any-present presence check (empty = lean on stop button + text stability). Run `orac browser doctor` after a provider redesign to find which field rotted. Live-verification status is per provider below.",
+  "claude": {
+    "_verified": "2026-06-15 — full round trip via `orac browser doctor` (probe OK). Stop selectors unconfirmed (harmless no-op; streaming signal gates completion).",
+    "url": "https://claude.ai/new",
+    "input": ["div.ProseMirror[role=\"textbox\"]", "[contenteditable=\"true\"][role=\"textbox\"]", "div.ProseMirror"],
+    "send": ["button[aria-label=\"Send message\"]", "button[aria-label*=\"Send\"]", "button[type=\"submit\"]"],
+    "response": "[class*=\"font-claude-response\"]",
+    "response_inner": null,
+    "streaming": ["[data-is-streaming=\"true\"]"],
+    "stop": ["button[aria-label=\"Stop response\"]", "button[aria-label*=\"Stop\"]"]
+  },
+  "gemini": {
+    "_verified": "2026-06-15 — full round trip via `orac browser doctor` (probe OK; Quill editor + Input.insertText + stop/stability completion).",
+    "url": "https://gemini.google.com/app",
+    "input": ["rich-textarea .ql-editor[contenteditable=\"true\"]", ".ql-editor[contenteditable=\"true\"]", "div[contenteditable=\"true\"][role=\"textbox\"]"],
+    "send": ["button[aria-label=\"Send message\"]", "button[aria-label*=\"Send\"]", "button.send-button"],
+    "response": "model-response",
+    "response_inner": "message-content",
+    "streaming": [],
+    "stop": ["button[aria-label=\"Stop response\"]", "button[aria-label*=\"Stop\"]"]
+  },
+  "openai": {
+    "_verified": "2026-06-15 — full round trip via `orac browser doctor` (probe OK; ProseMirror #prompt-textarea + result-streaming completion).",
+    "url": "https://chatgpt.com",
+    "input": ["#prompt-textarea", "div.ProseMirror#prompt-textarea", "textarea#prompt-textarea"],
+    "send": ["[data-testid=\"send-button\"]", "button[data-testid=\"send-button\"]", "button[aria-label*=\"Send\"]"],
+    "response": "[data-message-author-role=\"assistant\"]",
+    "response_inner": null,
+    "streaming": [".result-streaming"],
+    "stop": ["[data-testid=\"stop-button\"]", "button[aria-label*=\"Stop\"]"]
+  }
+}

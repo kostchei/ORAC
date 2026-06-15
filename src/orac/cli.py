@@ -213,6 +213,21 @@ def make_parser() -> argparse.ArgumentParser:
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8765)
 
+    browser = subparsers.add_parser("browser", help="Browser-foundation operations.")
+    browser_sub = browser.add_subparsers(dest="browser_command", required=True)
+    doctor = browser_sub.add_parser(
+        "doctor", help="Check provider chat-UI selectors against the live DOM."
+    )
+    doctor.add_argument(
+        "--provider", default=None,
+        help="Provider to check (claude/gemini/openai); default: all configured.",
+    )
+    doctor.add_argument("--cdp-url", default="http://localhost:9222")
+    doctor.add_argument(
+        "--no-probe", action="store_true",
+        help="Only report selector matches; skip the live one-word round trip.",
+    )
+
     daemon = subparsers.add_parser("daemon", help="Run ORAC continuously.")
     daemon_sub = daemon.add_subparsers(dest="daemon_command", required=True)
     daemon_run = daemon_sub.add_parser("run", help="Run the 24/7 agent loop.")
@@ -721,6 +736,32 @@ def cmd_lmstudio_start(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_browser_doctor(args: argparse.Namespace) -> int:
+    from orac.browser_brain import browser_doctor, format_doctor_report
+    from orac.browser_selectors import load_provider_selectors
+
+    if args.provider:
+        providers = [args.provider]
+    else:
+        providers = list(load_provider_selectors())
+
+    stale = False
+    for provider in providers:
+        report = browser_doctor(
+            provider, args.cdp_url, probe=not args.no_probe
+        )
+        print(format_doctor_report(report))
+        print()
+        # The probe is the authority: send/response/streaming/stop don't exist on
+        # an idle composer, so only a logged-in provider whose live round trip
+        # FAILS is a stale-selector fault worth a non-zero exit for a cron.
+        # Not-logged-in / unreachable / probe-skipped is not "stale".
+        probe = report.get("probe")
+        if report.get("login_ready") and probe is not None and not probe.get("ok"):
+            stale = True
+    return 1 if stale else 0
+
+
 def cmd_sprint_plan(store: BoardStore, args: argparse.Namespace) -> int:
     board = store.load()
     scrum = Scrum(build_brain(args.brain))
@@ -840,6 +881,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ui":
         run_ui(root=Path(args.root), host=args.host, port=args.port)
         return 0
+    if args.command == "browser" and args.browser_command == "doctor":
+        return cmd_browser_doctor(args)
     if args.command == "daemon" and args.daemon_command == "run":
         run_daemon(root=Path(args.root), interval_seconds=args.interval, cycles=args.cycles)
         return 0
