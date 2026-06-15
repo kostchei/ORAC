@@ -285,23 +285,19 @@ class BrowserKeyboard:
         self.page._session.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": key})
 
     def type(self, text: str, delay: int = 0) -> None:
-        del delay  # CDP primitive inserts the prompt atomically for reliability.
-        js = """
-        ((text) => {
-          const el = document.activeElement;
-          if (!el) throw new Error('no active input element');
-          const tag = (el.tagName || '').toLowerCase();
-          if (tag === 'textarea' || tag === 'input') {
-            el.value = text;
-          } else {
-            el.textContent = text;
-          }
-          el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: text}));
-          el.dispatchEvent(new Event('change', {bubbles: true}));
-          return true;
-        })
-        """
-        self.page._session.evaluate(f"{js}({json.dumps(text)})")
+        del delay  # Input.insertText inserts atomically; per-char delay is moot.
+        # Rich-text editors keep an internal document model and IGNORE DOM
+        # mutations they did not initiate: Claude and ChatGPT use ProseMirror,
+        # Gemini uses Quill. Setting `el.textContent = text` is therefore silently
+        # dropped — an EMPTY prompt is submitted with no error. CDP Input.insertText
+        # emulates IME/paste insertion: a trusted native event the editor's
+        # transaction pipeline picks up, the same path a real keystroke takes.
+        # The element is already focused (BrowserElement.click) and a prior
+        # select-all leaves the existing content selected, so insertText replaces
+        # it rather than appending. No DOM-write fallback: a failure here is a real
+        # CDP/editor fault worth surfacing, not masking with the broken textContent
+        # path this method exists to replace.
+        self.page._session.call("Input.insertText", {"text": text})
 
 
 class BrowserPage:

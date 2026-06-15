@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,56 @@ class BrowserLoginRequired(RuntimeError):
         )
 
 
+class BrowserProviderError(RuntimeError):
+    """A browser foundation provider returned a non-answer (rate cap, outage).
+
+    Distinct from ``BrowserLoginRequired`` (sign-in needed) and from a model's own
+    content refusal (which is a *valid* answer). Carries the provider and the
+    matched detail so the loop can treat the result as a provider-side failure
+    instead of trusting it as the model's reply — the same review-after philosophy
+    that makes a missing-login an explicit signal rather than an opaque timeout.
+    """
+
+    def __init__(self, provider: str, detail: str) -> None:
+        self.provider = provider
+        self.detail = detail
+        super().__init__(
+            f"{provider} returned a provider error, not an answer: {detail}"
+        )
+
+
+class ProviderRateLimited(BrowserProviderError):
+    """The provider's usage / message cap was hit (a non-answer, retry later)."""
+
+
+class ProviderUnavailable(BrowserProviderError):
+    """The provider produced no usable answer (empty turn / transient outage)."""
+
+
+# Rate-cap banners that some providers render as a response turn. Deliberately
+# narrow and high-confidence: a model's normal answer is very unlikely to contain
+# these exact phrasings, and a content *refusal* (a valid answer) is NOT matched.
+_PROVIDER_ERROR_PATTERNS: tuple[tuple[re.Pattern[str], type[BrowserProviderError]], ...] = (
+    (re.compile(r"you('?ve| have)?\s*reached your\s+\w*\s*(usage|message|daily|plan)\s+limit", re.I), ProviderRateLimited),
+    (re.compile(r"reached the current usage cap", re.I), ProviderRateLimited),
+    (re.compile(r"usage (cap|limit) (has been )?reached", re.I), ProviderRateLimited),
+    (re.compile(r"message limit (reached|hit)", re.I), ProviderRateLimited),
+    (re.compile(r"you('?ve| have)?\s*hit (the|your)\s+\w*\s*limit", re.I), ProviderRateLimited),
+)
+
+
+def _check_provider_error(provider: str, text: str) -> None:
+    """Raise a typed ``BrowserProviderError`` if *text* is a known non-answer.
+
+    A rate-cap banner sitting in the response region is provider chrome, not the
+    model's reply; surfaced typed so the loop never integrates it as the answer.
+    """
+    for pattern, error_cls in _PROVIDER_ERROR_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            raise error_cls(provider, match.group(0))
+
+
 _PROVIDER_URLS: dict[str, str] = {
     "claude": "https://claude.ai/new",
     "gemini": "https://gemini.google.com/app",
@@ -87,14 +138,27 @@ _RESPONSE_SELECTORS: dict[str, str] = {
 }
 
 # Selector that is present WHILE streaming and absent when the response is
-# complete.  None = fall back to text-stability polling.
+# complete.  None = lean on the stop-button signal + text stability.
 _STREAMING_SELECTORS: dict[str, str | None] = {
     # data-is-streaming attribute on the response element while Claude is typing.
     "claude": '[data-is-streaming]',
-    # Gemini has no reliable streaming attribute — use text stability.
+    # Gemini has no reliable streaming attribute — use the stop button + stability.
     "gemini": None,
     # ChatGPT adds class "result-streaming" to the prose div while generating.
     "openai": '.result-streaming',
+}
+
+# The "stop generating" button: present ONLY while the model is producing a
+# response, gone the instant it finishes (the universal stop->send toggle every
+# provider chat UI has). An independent completion signal that does not depend on
+# a per-provider streaming attribute, so it covers Gemini (which lacks one) and
+# reinforces the others. Best-effort: a selector that never matches simply makes
+# this a no-op and the streaming/stability signals still gate completion — a wrong
+# value cannot cause a premature "done", only forgo the extra confirmation.
+_STOP_BUTTON_SELECTORS: dict[str, str | None] = {
+    "claude": 'button[aria-label="Stop response"]',
+    "gemini": 'button[aria-label="Stop response"]',
+    "openai": 'button[data-testid="stop-button"]',
 }
 
 
@@ -195,7 +259,10 @@ class BrowserFoundationBrain:
                 finally:
                     page.close()
         except Exception as exc:
-            if isinstance(exc, (TimeoutError, ValueError, BrowserLoginRequired)):
+            if isinstance(
+                exc,
+                (TimeoutError, ValueError, BrowserLoginRequired, BrowserProviderError),
+            ):
                 raise
             raise RuntimeError(
                 f"Cannot connect to Chrome at {self.cdp_url}. "
@@ -255,41 +322,38 @@ class BrowserFoundationBrain:
                 f"waiting for {self.provider!r} to start responding."
             )
 
-        # --- Phase 3: wait for streaming to finish ----------------------------
+        # --- Phase 3: wait for the response to actually finish ----------------
+        # Done only when NO independent signal still says "in progress": the
+        # streaming attribute is gone (if the provider has one), the stop-generating
+        # button is gone, AND the text has held still for `stabilise_seconds`.
+        # Requiring all three is a conjunction for correctness — it stops a brief
+        # mid-generation pause from being mistaken for completion (the failure mode
+        # of the old text-stability-only path for Gemini), not a fallback that
+        # masks a failure.
         streaming_sel = _STREAMING_SELECTORS[self.provider]
-        if streaming_sel:
-            # Stream-indicator approach: wait until the element disappears.
-            while time.monotonic() < deadline:
-                if self.poll_interval > 0:
-                    time.sleep(self.poll_interval)
-                if not page.query_selector_all(streaming_sel):
-                    break
-            else:
-                raise TimeoutError(
-                    f"Browser foundation timed out after {self.timeout_seconds}s "
-                    f"waiting for {self.provider!r} streaming to complete."
-                )
+        stop_sel = _STOP_BUTTON_SELECTORS.get(self.provider)
+        last_text = ""
+        last_change_at = time.monotonic()
+        while time.monotonic() < deadline:
+            if self.poll_interval > 0:
+                time.sleep(self.poll_interval)
+            streaming = bool(page.query_selector_all(streaming_sel)) if streaming_sel else False
+            generating = bool(page.query_selector_all(stop_sel)) if stop_sel else False
+            els = page.query_selector_all(response_sel)
+            current = els[-1].inner_text() if els else ""
+            if current != last_text:
+                last_change_at = time.monotonic()
+                last_text = current
+            text_stable = time.monotonic() - last_change_at >= self.stabilise_seconds
+            if not streaming and not generating and text_stable:
+                break
         else:
-            # Text-stability fallback (Gemini): no change for stabilise_seconds.
-            last_text = ""
-            last_change_at = time.monotonic()
-            while time.monotonic() < deadline:
-                if self.poll_interval > 0:
-                    time.sleep(self.poll_interval)
-                els = page.query_selector_all(response_sel)
-                current = els[-1].inner_text() if els else ""
-                if current != last_text:
-                    last_change_at = time.monotonic()
-                    last_text = current
-                elif time.monotonic() - last_change_at >= self.stabilise_seconds:
-                    break
-            else:
-                raise TimeoutError(
-                    f"Browser foundation timed out after {self.timeout_seconds}s "
-                    f"waiting for {self.provider!r} response to stabilise."
-                )
+            raise TimeoutError(
+                f"Browser foundation timed out after {self.timeout_seconds}s "
+                f"waiting for {self.provider!r} response to complete."
+            )
 
-        # --- Phase 4: extract the response text -------------------------------
+        # --- Phase 4: extract and validate the response text ------------------
         els = page.query_selector_all(response_sel)
         if not els:
             raise RuntimeError(
@@ -299,12 +363,23 @@ class BrowserFoundationBrain:
         last_el = els[-1]
 
         # Gemini: the actual prose lives inside <message-content>.
+        text = ""
         if self.provider == "gemini":
             inner = last_el.query_selector("message-content")
             if inner:
-                return inner.inner_text().strip()
+                text = inner.inner_text().strip()
+        if not text:
+            text = last_el.inner_text().strip()
 
-        return last_el.inner_text().strip()
+        # A non-answer must never masquerade as the model's reply: an empty turn
+        # means the provider produced nothing usable; a rate-cap banner means the
+        # request was refused, not answered. Both surface typed (review-after).
+        if not text:
+            raise ProviderUnavailable(
+                self.provider, "empty response after the turn completed"
+            )
+        _check_provider_error(self.provider, text)
+        return text
 
 
 def _extract_new_text(before: str, after: str) -> str:

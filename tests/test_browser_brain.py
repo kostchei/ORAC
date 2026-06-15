@@ -23,15 +23,23 @@ from orac.storage import BoardStore
 # Browser primitive mock helpers
 # ---------------------------------------------------------------------------
 
-# Known streaming selectors (absent = streaming finished).
+# Selectors that signal "still generating"; absent = the turn has finished.
 _STREAMING_SELS = {"[data-is-streaming]", ".result-streaming"}
+# Stop-generating buttons: absent = no longer generating (the stop->send toggle).
+_STOP_SELS = {
+    'button[aria-label="Stop response"]',
+    'button[data-testid="stop-button"]',
+}
+# Both classes of "in progress" indicator read as absent in the default mock,
+# i.e. the model has finished — completion is gated by these plus text stability.
+_DONE_SELS = _STREAMING_SELS | _STOP_SELS
 
 
 def _make_page(response_el_text: str = "the answer", provider: str = "claude") -> MagicMock:
     """Build a mock browser Page for the two-phase wait flow.
 
     query_selector_all behaviour:
-    - streaming selectors → always [] (streaming already done)
+    - in-progress selectors (streaming / stop button) → always [] (already done)
     - response selectors  → [] on the first call (before submission),
                             [response_el] on all subsequent calls
     """
@@ -44,8 +52,8 @@ def _make_page(response_el_text: str = "the answer", provider: str = "claude") -
     qsa_count: list[int] = [0]
 
     def query_selector_all(selector: str) -> list:
-        if selector in _STREAMING_SELS:
-            return []  # streaming finished immediately
+        if selector in _DONE_SELS:
+            return []  # not streaming, no stop button -> generation finished
         # Response selector: first call (Phase 0 count) returns empty.
         qsa_count[0] += 1
         if qsa_count[0] == 1:
@@ -227,6 +235,79 @@ def test_gemini_uses_text_stability_not_streaming_selector(monkeypatch) -> None:
     )
     result = brain.think("builder", "doer", task, "prompt")
     assert result == "gemini answer"
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 ruggedness: text injection, provider errors, completion signal
+# ---------------------------------------------------------------------------
+
+
+def test_type_uses_cdp_insert_text() -> None:
+    # ProseMirror/Quill ignore DOM mutations they didn't initiate, so the prompt
+    # must go in via CDP Input.insertText (IME-style native insertion), NOT a
+    # textContent assignment that the editor silently drops.
+    from orac.browser_primitive import BrowserPage
+
+    session = MagicMock()
+    page = BrowserPage(session)
+    page.keyboard.type("hello world")
+    session.call.assert_any_call("Input.insertText", {"text": "hello world"})
+
+
+def test_rate_limit_banner_raises_provider_rate_limited(monkeypatch) -> None:
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(
+        response_el_text="You've reached your usage limit for Claude. Try again later.",
+        provider="claude",
+    )
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    with pytest.raises(bb.ProviderRateLimited):
+        brain.think("builder", "doer", task, "hi")
+
+
+def test_empty_response_raises_provider_unavailable(monkeypatch) -> None:
+    # An empty turn after completion is a non-answer, not the model's reply.
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = _make_page(response_el_text="", provider="claude")
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+    brain = BrowserFoundationBrain(provider="claude", stabilise_seconds=0, poll_interval=0)
+    with pytest.raises(bb.ProviderUnavailable):
+        brain.think("builder", "doer", task, "hi")
+
+
+def test_completion_waits_for_stop_button_to_disappear(monkeypatch) -> None:
+    # The turn is not "done" while the stop-generating button is still present,
+    # even when the text has momentarily stopped changing.
+    task = Task(title="t", status=TaskStatus.IN_PROGRESS)
+    page = MagicMock()
+    resp = MagicMock()
+    resp.inner_text.return_value = "answer"
+    resp.query_selector.return_value = None
+    state = {"resp": 0, "stop": 0}
+
+    def qsa(selector: str) -> list:
+        if selector in _STREAMING_SELS:
+            return []
+        if selector in _STOP_SELS:
+            state["stop"] += 1
+            # Stop button present for the first two polls, gone afterwards.
+            return [MagicMock()] if state["stop"] <= 2 else []
+        state["resp"] += 1
+        if state["resp"] == 1:
+            return []  # Phase 0 count before submission
+        return [resp]
+
+    page.query_selector_all.side_effect = qsa
+    page.wait_for_selector.return_value = MagicMock()
+    monkeypatch.setattr(bb, "_open_browser_page", _make_page_cm(page))
+
+    brain = BrowserFoundationBrain(
+        provider="claude", stabilise_seconds=0, poll_interval=0, timeout_seconds=5
+    )
+    result = brain.think("builder", "doer", task, "hi")
+    assert result == "answer"
+    assert state["stop"] >= 3, "completion did not wait for the stop button to vanish"
 
 
 # ---------------------------------------------------------------------------
