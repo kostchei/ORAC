@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -240,6 +243,14 @@ def make_parser() -> argparse.ArgumentParser:
     c_disallow.add_argument("sender")
     c_disc = chat_sub.add_parser("disconnect", help="Disable a channel and delete its stored secrets.")
     c_disc.add_argument("channel", choices=["slack", "whatsapp"])
+    chat_run = chat_sub.add_parser("run", help="Run the live Slack/WhatsApp chat connectors.")
+    chat_run.add_argument("--no-slack", action="store_true", help="Do not start Slack Socket Mode.")
+    chat_run.add_argument("--no-whatsapp", action="store_true", help="Do not start the WhatsApp bridge client.")
+    chat_run.add_argument("--poll-interval", type=float, default=3.0)
+    chat_sub.add_parser(
+        "whatsapp-bridge",
+        help="Run the local Node WhatsApp bridge (installs bridge dependencies on first run).",
+    )
 
     browser = subparsers.add_parser("browser", help="Browser-foundation operations.")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
@@ -833,13 +844,38 @@ def cmd_chat(store: BoardStore, args: argparse.Namespace) -> int:
 
     if cmd == "connect-whatsapp":
         spec = cfg["channels"]["whatsapp"]
-        print(
-            "WhatsApp pairing needs the local Node bridge (Baileys), which is Phase 3 "
-            f"of the chat control plane. Once it runs at {spec['bridge_url']}, this "
-            "command will render its QR code to scan; the session then seals to "
-            f"{spec['session_ref']!r}. See docs/chat-control-plane.md."
-        )
+        from orac.chat_signon import prepare_whatsapp
+
+        status = prepare_whatsapp(store, bridge_url=str(spec["bridge_url"]))
+        bridge = status["channels"]["whatsapp"]["bridge"]
+        if bridge.get("connected"):
+            print("WhatsApp bridge is paired and channel enabled.")
+        elif bridge.get("qr"):
+            print(f"WhatsApp bridge has a QR ready at {spec['bridge_url']}; scan it in the UI.")
+        else:
+            print(
+                f"WhatsApp bridge is not paired yet. Start it with "
+                "`orac chat whatsapp-bridge`, then open the local sign-on box."
+            )
         return 0
+
+    if cmd == "run":
+        from orac.chat_runner import run_chat_connectors
+
+        try:
+            run_chat_connectors(
+                root=store.root,
+                slack=not args.no_slack,
+                whatsapp=not args.no_whatsapp,
+                poll_interval=float(args.poll_interval),
+            )
+        except Exception as exc:
+            print(exc)
+            return 1
+        return 0
+
+    if cmd == "whatsapp-bridge":
+        return cmd_chat_whatsapp_bridge(store)
 
     if cmd == "allow":
         spec = cfg["channels"][args.channel]
@@ -869,6 +905,29 @@ def cmd_chat(store: BoardStore, args: argparse.Namespace) -> int:
         return 0
 
     raise ValueError(f"Unknown chat command {cmd!r}.")
+
+
+def cmd_chat_whatsapp_bridge(store: BoardStore) -> int:
+    bridge_dir = Path(__file__).resolve().parents[2] / "bridges" / "whatsapp"
+    if not bridge_dir.exists():
+        print(f"WhatsApp bridge directory not found at {bridge_dir}.")
+        return 1
+    env = dict(os.environ)
+    env["ORAC_ROOT"] = str(store.root.resolve())
+    node_modules = bridge_dir / "node_modules"
+    npm = shutil.which("npm.cmd") or shutil.which("npm")
+    node = shutil.which("node.exe") or shutil.which("node")
+    if node is None:
+        print("Node.js was not found on PATH; install Node.js before starting WhatsApp.")
+        return 1
+    if not node_modules.exists():
+        if npm is None:
+            print("npm was not found on PATH; install bridge dependencies manually first.")
+            return 1
+        install = subprocess.run([npm, "--prefix", str(bridge_dir), "install"], env=env)
+        if install.returncode != 0:
+            return install.returncode
+    return subprocess.run([node, str(bridge_dir / "index.mjs")], cwd=store.root, env=env).returncode
 
 
 def cmd_browser_doctor(args: argparse.Namespace) -> int:

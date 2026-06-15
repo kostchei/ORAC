@@ -320,6 +320,78 @@ function renderAudio(audio) {
     .join("");
 }
 
+function credentialCount(credentials) {
+  const values = Object.values(credentials || {});
+  return `${values.filter((item) => item.stored).length}/${values.length}`;
+}
+
+function renderAllowlist(channel, senders) {
+  const target = document.querySelector(`#${channel}-allowlist`);
+  if (!senders || !senders.length) {
+    target.innerHTML = `<p class="empty-state">No allowed senders.</p>`;
+    return;
+  }
+  target.innerHTML = senders.map((sender) => `
+    <span class="allow-pill">
+      <span>${html(sender)}</span>
+      <button type="button" class="remove-sender" data-channel="${html(channel)}" data-sender="${html(sender)}">Remove</button>
+    </span>`).join("");
+}
+
+function renderQrBox(whatsapp) {
+  const target = document.querySelector("#whatsapp-qr");
+  const bridge = whatsapp.bridge || {};
+  const qr = bridge.qr || "";
+  if (qr && String(qr).startsWith("data:image/")) {
+    target.innerHTML = `<img src="${html(qr)}" alt="WhatsApp pairing QR" />`;
+    return;
+  }
+  if (qr) {
+    target.innerHTML = `<pre>${html(qr)}</pre>`;
+    return;
+  }
+  target.innerHTML = `<span>${html(bridge.message || "Bridge not reachable.")}</span>`;
+}
+
+function renderChat(chat) {
+  const slack = chat.channels?.slack || {};
+  const whatsapp = chat.channels?.whatsapp || {};
+  const runtime = chat.runtime || {};
+  const bridgeRuntime = runtime.whatsapp_bridge || {};
+  const connectorsRuntime = runtime.connectors || {};
+  document.querySelector("#chat-master-status").textContent = chat.enabled ? "on" : "off";
+  document.querySelector("#slack-status").textContent =
+    `${slack.enabled ? "on" : "off"} - secrets ${credentialCount(slack.credentials)}`;
+  document.querySelector("#whatsapp-status").textContent =
+    `${whatsapp.enabled ? "on" : "off"} - bridge ${whatsapp.bridge?.reachable ? "ready" : "offline"}`;
+  document.querySelector("#whatsapp-bridge-runtime").textContent =
+    bridgeRuntime.running
+      ? `running pid ${bridgeRuntime.pid}`
+      : bridgeRuntime.external_running
+        ? "running externally"
+        : "stopped";
+  document.querySelector("#chat-connectors-runtime").textContent =
+    connectorsRuntime.running ? `running pid ${connectorsRuntime.pid}` : "stopped";
+  document.querySelector("#comms-log-path").textContent =
+    bridgeRuntime.log_dir || connectorsRuntime.log_dir || "n/a";
+  document.querySelector("#whatsapp-bridge-url").value = whatsapp.bridge_url || "http://localhost:8788";
+  renderAllowlist("slack", slack.authorized_senders || []);
+  renderAllowlist("whatsapp", whatsapp.authorized_senders || []);
+  renderQrBox(whatsapp);
+}
+
+function openSettingsPane() {
+  document.querySelector("#settings-backdrop").hidden = false;
+  document.querySelector("#settings-pane").classList.add("open");
+  document.querySelector("#settings-pane").setAttribute("aria-hidden", "false");
+}
+
+function closeSettingsPane() {
+  document.querySelector("#settings-pane").classList.remove("open");
+  document.querySelector("#settings-pane").setAttribute("aria-hidden", "true");
+  document.querySelector("#settings-backdrop").hidden = true;
+}
+
 function renderSettings(settings) {
   document.querySelector("#setting-monthly-foundation").value = settings.monthly_foundation_budget_usd;
   document.querySelector("#setting-cycle-cost").value = settings.estimated_foundation_cycle_usd;
@@ -357,7 +429,11 @@ function renderTimeline(events) {
 }
 
 async function refresh() {
-  const [state, loopStatus] = await Promise.all([api("/api/state"), api("/api/loop/status")]);
+  const [state, loopStatus, chat] = await Promise.all([
+    api("/api/state"),
+    api("/api/loop/status"),
+    api("/api/chat"),
+  ]);
   window.oracLoadedModels = state.loaded_models || [];
   renderRunStatus(state, loopStatus);
   renderAttention(state, loopStatus);
@@ -372,6 +448,7 @@ async function refresh() {
   renderSettings(state.settings);
   renderTimeline(state.interactions);
   renderLoopStatusText(loopStatus);
+  renderChat(chat);
 }
 
 document.querySelector("#request-form").addEventListener("submit", async (event) => {
@@ -391,6 +468,102 @@ document.querySelector("#show-add-request").addEventListener("click", () => {
   const drawer = document.querySelector("#add-request-drawer");
   drawer.open = true;
   document.querySelector("#request-title").focus();
+});
+
+document.querySelector("#open-settings-pane").addEventListener("click", openSettingsPane);
+document.querySelector("#open-connections-pane").addEventListener("click", openSettingsPane);
+document.querySelector("#close-settings-pane").addEventListener("click", closeSettingsPane);
+document.querySelector("#settings-backdrop").addEventListener("click", closeSettingsPane);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeSettingsPane();
+});
+
+document.querySelector("#slack-connect-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = await postJson("/api/chat/slack/connect", {
+    bot_token: document.querySelector("#slack-bot-token").value,
+    app_token: document.querySelector("#slack-app-token").value,
+  });
+  document.querySelector("#slack-bot-token").value = "";
+  document.querySelector("#slack-app-token").value = "";
+  document.querySelector("#chat-message").textContent = "Slack connected.";
+  renderChat(result);
+});
+
+document.querySelector("#whatsapp-connect-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = await postJson("/api/chat/whatsapp/connect", {
+    bridge_url: document.querySelector("#whatsapp-bridge-url").value,
+  });
+  document.querySelector("#chat-message").textContent = result.channels?.whatsapp?.bridge?.reachable
+    ? "WhatsApp bridge ready."
+    : "WhatsApp bridge offline.";
+  renderChat(result);
+});
+
+document.querySelectorAll(".allow-form").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const channel = form.dataset.channel;
+    const input = form.querySelector("input");
+    const result = await postJson("/api/chat/allow", { channel, sender: input.value });
+    document.querySelector("#chat-message").textContent = `${channel} sender allowed.`;
+    input.value = "";
+    renderChat(result);
+  });
+});
+
+async function runChatAction(path, message) {
+  const target = document.querySelector("#chat-message");
+  target.textContent = message;
+  const result = await postJson(path, {});
+  renderChat(result);
+  target.textContent = "Ready.";
+}
+
+document.querySelector("#start-whatsapp-bridge").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/whatsapp/start", "Starting WhatsApp bridge...");
+});
+
+document.querySelector("#stop-whatsapp-bridge").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/whatsapp/stop", "Stopping WhatsApp bridge...");
+});
+
+document.querySelector("#restart-whatsapp-bridge").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/whatsapp/restart", "Restarting WhatsApp bridge...");
+});
+
+document.querySelector("#start-chat-connectors").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/connectors/start", "Starting chat control...");
+});
+
+document.querySelector("#stop-chat-connectors").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/connectors/stop", "Stopping chat control...");
+});
+
+document.querySelector("#restart-chat-connectors").addEventListener("click", async () => {
+  await runChatAction("/api/chat/runtime/connectors/restart", "Restarting chat control...");
+});
+
+document.querySelector(".chat-panel").addEventListener("click", async (event) => {
+  const removeButton = event.target.closest(".remove-sender");
+  if (removeButton) {
+    const result = await postJson("/api/chat/disallow", {
+      channel: removeButton.dataset.channel,
+      sender: removeButton.dataset.sender,
+    });
+    document.querySelector("#chat-message").textContent = `${removeButton.dataset.channel} sender removed.`;
+    renderChat(result);
+    return;
+  }
+  const disconnectButton = event.target.closest(".disconnect-chat");
+  if (disconnectButton) {
+    const result = await postJson("/api/chat/disconnect", {
+      channel: disconnectButton.dataset.channel,
+    });
+    document.querySelector("#chat-message").textContent = `${disconnectButton.dataset.channel} disconnected.`;
+    renderChat(result);
+  }
 });
 
 document.querySelector("#run-cycle").addEventListener("click", async () => {

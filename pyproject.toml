@@ -20,6 +20,9 @@ audio = [
   "sounddevice>=0.4.6",
   "pyttsx3>=2.90",
 ]
+chat = [
+  "slack-bolt>=1.21.0",
+]
 
 [project.scripts]
 orac = "orac.cli:main"

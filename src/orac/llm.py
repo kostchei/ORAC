@@ -119,6 +119,7 @@ class OpenAICompatibleBrain:
     model: str
     api_key: str | None = None
     timeout_seconds: int = 60
+    max_tokens: int | None = None
 
     def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
         return self._complete(self._messages(agent_name, role, task, prompt))
@@ -156,6 +157,8 @@ class OpenAICompatibleBrain:
 
     def _complete(self, messages: list[dict], response_format: dict | None = None) -> str:
         payload: dict = {"model": self.model, "messages": messages, "temperature": 0.2}
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
         if response_format is not None:
             payload["response_format"] = response_format
         headers = {"Content-Type": "application/json"}

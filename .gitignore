@@ -10,3 +10,4 @@ htmlcov/
 .orac/
 dist/
 build/
+node_modules/

@@ -80,6 +80,30 @@ def test_lmstudio_reads_reasoning_content_when_content_is_empty(monkeypatch) -> 
     assert out == '{"tool":"git.status","args":{}}'
 
 
+def test_openai_compatible_brain_sends_max_tokens_when_set(monkeypatch) -> None:
+    import orac.llm as llm
+
+    captured = {}
+
+    class _FakeResp:
+        def read(self): return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=0):
+        captured.update(json.loads(req.data.decode("utf-8")))
+        return _FakeResp()
+
+    monkeypatch.setattr(llm, "urlopen", fake_urlopen)
+
+    out = llm.LMStudioBrain(max_tokens=123).think(
+        "Builder", "builder", Task(title="x"), "go"
+    )
+
+    assert out == "ok"
+    assert captured["max_tokens"] == 123
+
+
 def test_model_for_work_kind_uses_slots() -> None:
     policy = dict(DEFAULT_POLICY)
     policy.update(

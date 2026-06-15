@@ -13,6 +13,15 @@ from typing import Any
 from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
 from orac.broker_store import BrokerStore
 from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
+from orac.chat_processes import ChatProcessRuntime
+from orac.chat_signon import (
+    allow_sender,
+    chat_status,
+    connect_slack,
+    disconnect_channel,
+    disallow_sender,
+    prepare_whatsapp,
+)
 from orac.dependency_installer import install_audio_stack
 from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
@@ -33,7 +42,8 @@ def run_ui(root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) ->
     store.init()
     policy_store = ModelPolicyStore(store)
     runtime = UIRuntime(store)
-    handler = _make_handler(store, runtime)
+    chat_runtime = ChatProcessRuntime(store)
+    handler = _make_handler(store, runtime, chat_runtime)
     server = ThreadingHTTPServer((host, port), handler)
     print(f"ORAC UI listening on http://{host}:{port}")
     policy = policy_store.load_policy()
@@ -125,7 +135,9 @@ class UIRuntime:
             self.stop_event.wait(interval)
 
 
-def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    store: BoardStore, runtime: UIRuntime, chat_runtime: ChatProcessRuntime
+) -> type[BaseHTTPRequestHandler]:
     class ORACHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path == "/":
@@ -163,6 +175,9 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                 return
             if self.path == "/api/settings":
                 self._send_json(ModelPolicyStore(store).load_policy())
+                return
+            if self.path == "/api/chat":
+                self._send_json(_chat_payload(store, chat_runtime))
                 return
             if self.path == "/api/loop/status":
                 self._send_json(runtime.status())
@@ -222,6 +237,71 @@ def _make_handler(store: BoardStore, runtime: UIRuntime) -> type[BaseHTTPRequest
                 current.update(payload)
                 policy_store.save_policy(current)
                 self._send_json(policy_store.load_policy())
+                return
+            if self.path == "/api/chat/slack/connect":
+                payload = self._read_json()
+                connect_slack(
+                    store,
+                    payload.get("bot_token", ""),
+                    payload.get("app_token", ""),
+                )
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/whatsapp/connect":
+                payload = self._read_json()
+                prepare_whatsapp(
+                    store,
+                    bridge_url=payload.get("bridge_url", ""),
+                    session=payload.get("session", ""),
+                )
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/allow":
+                payload = self._read_json()
+                allow_sender(
+                    store,
+                    payload.get("channel", ""),
+                    payload.get("sender", ""),
+                )
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/disallow":
+                payload = self._read_json()
+                disallow_sender(
+                    store,
+                    payload.get("channel", ""),
+                    payload.get("sender", ""),
+                )
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/disconnect":
+                payload = self._read_json()
+                disconnect_channel(store, payload.get("channel", ""))
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/whatsapp/start":
+                chat_runtime.start_whatsapp_bridge()
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/whatsapp/stop":
+                chat_runtime.stop_whatsapp_bridge()
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/whatsapp/restart":
+                chat_runtime.restart_whatsapp_bridge()
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/connectors/start":
+                chat_runtime.start_connectors()
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/connectors/stop":
+                chat_runtime.stop_connectors()
+                self._send_json(_chat_payload(store, chat_runtime))
+                return
+            if self.path == "/api/chat/runtime/connectors/restart":
+                chat_runtime.restart_connectors()
+                self._send_json(_chat_payload(store, chat_runtime))
                 return
             if self.path == "/api/browser/launch":
                 policy = ModelPolicyStore(store).load_policy()
@@ -283,6 +363,12 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         # the unacked count without a separate poll.
         "review_queue": review_queue_summary(BrokerStore(store.root).init()).to_dict(),
     }
+
+
+def _chat_payload(store: BoardStore, chat_runtime: ChatProcessRuntime) -> dict[str, Any]:
+    payload = chat_status(store)
+    payload["runtime"] = chat_runtime.status()
+    return payload
 
 
 def _reviews_payload(store: BoardStore) -> dict[str, Any]:

@@ -17,10 +17,21 @@
           <button id="run-cycle" type="button">Run Cycle</button>
           <button id="start-loop" type="button">Start Loop</button>
           <button id="stop-loop" type="button">Stop Loop</button>
+          <button id="open-settings-pane" type="button">Settings</button>
         </div>
       </header>
 
       <section id="run-status" class="run-status panel" aria-live="polite"></section>
+
+      <section class="chat-summary panel">
+        <span class="kicker">Connections</span>
+        <div class="chat-summary-grid">
+          <div><strong>Chat</strong><span id="chat-master-status">off</span></div>
+          <div><strong>Slack</strong><span id="slack-status">off</span></div>
+          <div><strong>WhatsApp</strong><span id="whatsapp-status">off</span></div>
+          <button id="open-connections-pane" class="secondary-button" type="button">Manage</button>
+        </div>
+      </section>
 
       <section class="cockpit-grid">
         <section class="panel attention-panel">
@@ -147,6 +158,96 @@
         <div id="timeline" class="timeline"></div>
       </section>
     </main>
+    <div id="settings-backdrop" class="settings-backdrop" hidden></div>
+    <aside id="settings-pane" class="settings-pane" aria-hidden="true">
+      <div class="settings-pane-head">
+        <div>
+          <span class="kicker">Settings</span>
+          <h2>Connections</h2>
+        </div>
+        <button id="close-settings-pane" class="secondary-button" type="button">Close</button>
+      </div>
+      <div class="settings-tabs" role="tablist" aria-label="Settings">
+        <button class="settings-tab active" type="button" role="tab" aria-selected="true">Connections</button>
+      </div>
+      <section class="panel chat-panel">
+        <div class="chat-runtime">
+          <div>
+            <strong>WhatsApp bridge</strong>
+            <span id="whatsapp-bridge-runtime">stopped</span>
+          </div>
+          <div class="chat-runtime-actions">
+            <button id="start-whatsapp-bridge" type="button">Start Bridge</button>
+            <button id="restart-whatsapp-bridge" type="button">Restart Bridge</button>
+            <button id="stop-whatsapp-bridge" class="secondary-button" type="button">Stop Bridge</button>
+          </div>
+          <div>
+            <strong>Chat control</strong>
+            <span id="chat-connectors-runtime">stopped</span>
+          </div>
+          <div class="chat-runtime-actions">
+            <button id="start-chat-connectors" type="button">Start Control</button>
+            <button id="restart-chat-connectors" type="button">Restart Control</button>
+            <button id="stop-chat-connectors" class="secondary-button" type="button">Stop Control</button>
+          </div>
+        </div>
+        <div class="comms-log-path">
+          <strong>Comms logs</strong>
+          <span id="comms-log-path">n/a</span>
+        </div>
+        <div class="chat-grid">
+          <article class="chat-channel" data-channel="slack">
+            <div class="chat-channel-head">
+              <h3>Slack</h3>
+            </div>
+            <form id="slack-connect-form" class="chat-form">
+              <label>
+                Bot token
+                <input id="slack-bot-token" type="password" autocomplete="off" placeholder="xoxb-..." required />
+              </label>
+              <label>
+                App token
+                <input id="slack-app-token" type="password" autocomplete="off" placeholder="xapp-..." required />
+              </label>
+              <button type="submit">Connect Slack</button>
+            </form>
+            <form class="chat-form allow-form" data-channel="slack">
+              <label>
+                Allowed Slack user
+                <input id="slack-sender" autocomplete="off" placeholder="U0123ABCD" required />
+              </label>
+              <button type="submit">Allow</button>
+            </form>
+            <div id="slack-allowlist" class="allowlist"></div>
+            <button class="secondary-button disconnect-chat" data-channel="slack" type="button">Disconnect Slack</button>
+          </article>
+
+          <article class="chat-channel" data-channel="whatsapp">
+            <div class="chat-channel-head">
+              <h3>WhatsApp</h3>
+            </div>
+            <form id="whatsapp-connect-form" class="chat-form">
+              <label>
+                Bridge URL
+                <input id="whatsapp-bridge-url" autocomplete="off" placeholder="http://localhost:8788" required />
+              </label>
+              <button type="submit">Pair WhatsApp</button>
+            </form>
+            <div id="whatsapp-qr" class="qr-box"></div>
+            <form class="chat-form allow-form" data-channel="whatsapp">
+              <label>
+                Allowed phone
+                <input id="whatsapp-sender" autocomplete="off" placeholder="+61400000000" required />
+              </label>
+              <button type="submit">Allow</button>
+            </form>
+            <div id="whatsapp-allowlist" class="allowlist"></div>
+            <button class="secondary-button disconnect-chat" data-channel="whatsapp" type="button">Disconnect WhatsApp</button>
+          </article>
+        </div>
+        <div id="chat-message" class="settings-status"></div>
+      </section>
+    </aside>
     <script src="/static/app.js"></script>
   </body>
 </html>
