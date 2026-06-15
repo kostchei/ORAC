@@ -37,6 +37,13 @@ files — so most of it is `auto + notify`; `push` / PR is the external step tha
 
 ## 2. Communications  ·  *irreversible · external-private/public*  ·  approval-first
 
+> **Not the same as the chat control plane.** Operating ORAC *from* WhatsApp/Slack
+> (add a goal, approve a review) is a **control plane / transport**, peer to the CLI —
+> the agent gains no messaging power. That is scoped separately in
+> [chat-control-plane.md](chat-control-plane.md) and, by explicit decision, may use an
+> unofficial WhatsApp bridge (convenience over durability). **This section is the
+> other thing:** the *agent* sending messages as work. For that, the rules below hold.
+
 **Do not start with browser automation for messaging.** Prefer official APIs. Model as two
 distinct capabilities — `channel.read` and `channel.send` — and default sends to **draft mode**:
 ORAC drafts → user approves → connector sends.
