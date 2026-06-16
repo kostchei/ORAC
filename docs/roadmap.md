@@ -179,14 +179,18 @@ recurse (the register cap is already global, so depth is naturally bounded).
       without ever waiving the safety floor. Notify transport surfaces the queue each daemon tick
       and in the UI state. *(See Build-order item 3. Optional follow-up: a push toast + UI
       ack/approve buttons.)*
-- [ ] **Credential vault** (DPAPI / Windows Credential Manager, opaque `credential_ref`,
-      redaction at the logging layer). **Hard blocker for Group 2.**
+- [x] **Credential vault** (first cut). `credentials.py::CredentialStore` seals secrets with Windows
+      DPAPI, stores opaque `credential_ref`s in `.orac/credentials.json`, and `redact()`s secrets out
+      of logs; `chat_slack` already uses it. This was the **hard blocker for Group 2 — now cleared.**
 
 Then the remaining four categories, in **risk order** (lowest first), each gated by the now-mature
 risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 
-- [ ] **Group 2 — Communications.** `channel.read` then `channel.send`; default **draft → approve
-      → send**. Start with Slack *read*. (Blocked on credential vault.)
+- [ ] **Group 2 — Communications (NEXT — unblocked).** Channel-agnostic `channel.read` /
+      `channel.draft` / `channel.send` over Slack **and** WhatsApp; default **draft → approve →
+      send** (the existing park/approve machinery is the draft gate). Irreversible, so rollback is the
+      human-in-the-loop correction path. Sole holder: a new **Messenger** agent. Design:
+      [spec-group2-comms.md](spec-group2-comms.md).
 - [ ] **Group 3 — Media.** Job queue, not blocking calls; ComfyUI; `review → publish`.
 - [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; e-stop; cooldowns;
       Home Assistant / MQTT first. Approval by default.
