@@ -26,6 +26,10 @@ from orac.models import CapabilityRequest, CapabilityStatus, Task
 
 OBSERVATION_LIMIT = 1500
 DEFAULT_MAX_STEPS = 16
+# Consecutive identical tool calls before a session is stopped as stuck. A local
+# model that loops would otherwise burn the whole step budget — and the daemon's
+# fair-share band — repeating one call. Exact-repeat only; any change resets.
+REPETITION_LIMIT = 3
 
 # Enforced server-side where the brain supports structured output (LM Studio /
 # OpenAI response_format): the model physically cannot emit a malformed
@@ -62,12 +66,37 @@ class SessionResult:
 
 
 @dataclass
+class RepetitionDetector:
+    """Stops a session looping on identical consecutive tool calls (Roo Code's
+    ToolRepetitionDetector, ported). Counts occurrences of the canonical
+    (tool, args) of the current decision; a different tool or args resets the
+    count. ``trips`` returns True on the ``limit``-th identical call in a row —
+    the caller blocks *before* dispatching it, so the broker is never asked to
+    repeat work the model is stuck on. Per-session by construction (a fresh
+    session is a fresh context, hence a fresh detector)."""
+
+    limit: int = REPETITION_LIMIT
+    _last: str | None = None
+    _count: int = 0
+
+    def trips(self, tool: str, args: dict[str, Any]) -> bool:
+        key = json.dumps({"tool": tool, "args": args}, sort_keys=True, default=str)
+        if key == self._last:
+            self._count += 1
+        else:
+            self._last = key
+            self._count = 1
+        return self.limit > 0 and self._count >= self.limit
+
+
+@dataclass
 class AgentSession:
     profile: AgentProfile
     brain: Brain
     broker: ToolBroker
     max_steps: int = DEFAULT_MAX_STEPS
     transcript: list[str] = field(default_factory=list)
+    repetition: RepetitionDetector = field(default_factory=RepetitionDetector)
 
     def run(self, task: Task, contract: str) -> SessionResult:
         think_json = getattr(self.brain, "think_json", None)
@@ -121,6 +150,22 @@ class AgentSession:
                     ),
                 )
             args = decision.get("args") or {}
+            if self.repetition.trips(str(tool), dict(args)):
+                # Stuck loop: the model emitted the identical decision
+                # repetition.limit times running. Stop the session rather than
+                # dispatch the same call again (with the repair loop, the slice
+                # re-runs with fresh context, which breaks the loop).
+                return self._finish(
+                    task,
+                    SessionResult(
+                        status="blocked",
+                        summary=(
+                            f"Repetition limit ({self.repetition.limit}): "
+                            f"{tool} called identically without progress at step {step}."
+                        ),
+                        steps=step,
+                    ),
+                )
             try:
                 result = self.broker.request(
                     CapabilityRequest(

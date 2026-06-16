@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass
 
@@ -256,6 +257,59 @@ def test_return_review_off_by_default_accepts_verified_work(tmp_path, monkeypatc
         context={"repo_root": str(tmp_path)},  # review_return defaults to False
     )
     assert child.status is TaskStatus.DONE  # no review brain consulted
+
+
+# === 3b. gap B: a scored RETURN-review rejection drives a repair with feedback =
+
+
+class _ScriptedJSONBrain:
+    def __init__(self, replies: list[str]) -> None:
+        self.replies = list(replies)
+
+    def think_json(self, agent, role, task, prompt, schema):
+        return self.replies.pop(0)
+
+    def think(self, *a, **k):
+        raise AssertionError("the doer session is mocked; only the review uses the brain")
+
+
+def _scored(decision: str, score: int, reason: str = "r") -> str:
+    return json.dumps({"decision": decision, "score": score, "reason": reason})
+
+
+def test_scored_return_rejection_drives_a_repair_carrying_feedback(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".orac").mkdir()
+    broker = ToolBroker.from_store(BrokerStore(tmp_path).init())
+    board = Board()
+    parent = Task(title="parent", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    session = _MockSession()
+    import orac.work as work_mod
+
+    monkeypatch.setattr(work_mod, "verify_goal_done", lambda *a, **k: (True, "tests passed"))
+    monkeypatch.setattr(work_mod, "AgentSession", lambda *a, **k: session)
+
+    # Lens order Intent, Simple, Security, Efficiency. Round 1: Intent blocks ->
+    # DENIED -> repair (not a dead-end block). Round 2 (the repair child): all pass
+    # high -> ships, so the original slice is resolved via the repair.
+    brain = _ScriptedJSONBrain(
+        [_scored("block", 4, "solves a different problem"), _scored("pass", 8),
+         _scored("pass", 9), _scored("pass", 8),
+         _scored("pass", 9), _scored("pass", 8), _scored("pass", 9), _scored("pass", 8)]
+    )
+
+    child = run_goal_task(
+        board, parent, goal="add a helper", acceptance_criteria=("works",),
+        work_kind="code", brain=brain, broker=broker,
+        context={"repo_root": str(tmp_path)}, max_repairs=2, scored_return=True,
+    )
+
+    assert child.status is TaskStatus.DONE                       # resolved via the repair
+    repair_children = [t for t in board.tasks if t.parent_id == child.id]
+    assert len(repair_children) == 1
+    assert "review_feedback" in session.contracts[1]             # feedback carried into repair
+    assert any("RETURN review" in log.message for log in child.work_log)
 
 
 # === 4. scrum routes large goals to the fan-out, small ones to one doer =======

@@ -191,6 +191,18 @@
       "description": "Restore the most recently stashed working tree.",
       "regular_use": "Builder resumes set-aside work after a clean, path-scoped commit.",
       "inputs": ["task_id", "root"]
+    },
+    {
+      "name": "repo.checkpoint",
+      "description": "Snapshot the full working tree (tracked + untracked) as a restorable point without changing it.",
+      "regular_use": "Builder records a step checkpoint before a risky edit so any step can be undone, not just commits.",
+      "inputs": ["task_id", "root", "label"]
+    },
+    {
+      "name": "repo.restore_checkpoint",
+      "description": "Restore the working tree exactly to a checkpoint sha: revert edits, restore deletions, remove files added since.",
+      "regular_use": "Builder rolls back to a checkpoint when an edit went wrong, before trying a different approach.",
+      "inputs": ["task_id", "root", "sha"]
     }
   ]
 }

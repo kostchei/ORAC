@@ -170,15 +170,32 @@ class Scrum:
 
         from orac.work import run_goal_task
 
+        # Promote the single-doer code RETURN edge to the scored + Security council
+        # review (gap A) with a bounded repair loop (gap B). The scored review needs
+        # a structured-output brain to produce its verdicts; without that capability
+        # we proceed on the deterministic verifier alone rather than crash the goal,
+        # and leave a visible trace (capability gate, not a silent pass).
+        session_brain = self._session_brain(task)
+        scored = task.work_kind == "code" and callable(
+            getattr(session_brain, "think_json", None)
+        )
+        if task.work_kind == "code" and not scored:
+            task.add_log(
+                "system",
+                "Scored RETURN review unavailable (brain lacks structured output); "
+                "accepting on the deterministic verifier alone.",
+            )
         child = run_goal_task(
             board=board,
             parent=task,
             goal=goal,
             acceptance_criteria=tuple(task.acceptance_criteria),
             work_kind=task.work_kind,
-            brain=self._session_brain(task),
+            brain=session_brain,
             broker=self.broker,
             context=context,
+            max_repairs=2 if scored else 0,
+            scored_return=scored,
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)

@@ -133,6 +133,46 @@ def test_session_unparseable_reply_blocks_without_crashing(tmp_path) -> None:
     assert "Unparseable" in result.summary
 
 
+def test_session_stops_on_repeated_identical_tool_calls(tmp_path) -> None:
+    # A stuck model emits the identical decision over and over. The detector
+    # stops the session on the limit-th identical call, BEFORE the broker is
+    # asked to repeat the work a third time.
+    broker, store = _setup(tmp_path)
+    status_call = json.dumps({"tool": "git.status", "args": {"root": str(tmp_path)}})
+    brain = ScriptedBrain([status_call, status_call, status_call, status_call])
+    task = Task(title="loop", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: anything."
+    )
+
+    assert result.status == "blocked"
+    assert "Repetition limit (3)" in result.summary
+    # the third identical call never reached the broker
+    assert [e.tool for e in store.audit_log()].count("git.status") == 2
+
+
+def test_session_repetition_counter_resets_on_a_different_call(tmp_path) -> None:
+    # Alternating (never three identical in a row) must never trip; the model
+    # finishes normally.
+    broker, _ = _setup(tmp_path)
+    status_call = json.dumps({"tool": "git.status", "args": {"root": str(tmp_path)}})
+    read_call = json.dumps(
+        {"tool": "repo.read_file", "args": {"path": str(tmp_path / ".gitignore")}}
+    )
+    brain = ScriptedBrain(
+        [status_call, read_call, status_call, read_call, status_call,
+         json.dumps({"done": True, "summary": "alternated without looping."})]
+    )
+    task = Task(title="alternate", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: anything."
+    )
+
+    assert result.status == "done"
+
+
 def test_parse_decision_tolerates_fences_only() -> None:
     assert parse_decision('```json\n{"done": true, "summary": "x"}\n```') == {
         "done": True,

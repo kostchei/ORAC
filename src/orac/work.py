@@ -140,6 +140,7 @@ def run_goal_task(
     contract_metadata: dict[str, Any] | None = None,
     max_repairs: int = 0,
     review_return: bool = False,
+    scored_return: bool = False,
 ) -> Task:
     """Spawn the kind's doer against a goal; the model decides how.
 
@@ -251,69 +252,36 @@ def run_goal_task(
         # summary (most likely live-fire failure: a local model declaring victory
         # with red or unrun tests).
         ok, detail = verify_goal_done(spec, child, broker, context)
-        if ok:
-            # The deterministic verifier proved the work RUNS. When enabled (the
-            # orchestrated fan-out turns it on), promote the RETURN edge to a full
-            # council review: three lenses judge whether what came back is on-goal,
-            # minimally shaped, and waste-free before it integrates (rugged
-            # decomposition §13). A rejected return blocks the slice with the lens
-            # reasons rather than integrating questionable work on green tests alone.
-            review = None
-            if review_return:
-                from orac.plan_review import review_return as _review_return_edge  # noqa: PLC0415
 
-                review = _review_return_edge(
-                    goal, acceptance_criteria, result.summary, brain, task=child
-                )
-            if review is not None and review.status is not CapabilityStatus.ALLOWED:
-                child.add_log(
-                    "Council",
-                    f"RETURN review did not accept the slice "
-                    f"({review.status.value}): {review.reason}",
-                )
-                child.transition(TaskStatus.BLOCKED)
-                _retire("blocked")
-                parent.transition(TaskStatus.BLOCKED)
-                parent.add_log(
-                    "Orchestrator",
-                    f"{spec.kind} subtask {child.id} blocked by RETURN review: {review.reason}",
-                )
-            else:
-                child.transition(TaskStatus.DONE)
-                _retire("done")
-                reviewed = " + RETURN review" if review is not None else ""
-                parent.add_log(
-                    "Orchestrator",
-                    f"{spec.kind} subtask {child.id} done (verified{reviewed}): {result.summary}",
-                )
-        elif max_repairs > 0:
-            # Repair is a NEW focused slice (rugged decomposition §13): a child of
-            # this one, visible on the board and independently verified in its own
-            # right — not an invisible in-place re-run. It carries the exact failure
-            # and inherits this slice's scope; a repair that itself fails verification
-            # chains one more bounded repair (max_repairs - 1) before giving up.
+        def _repair(cause: str, extra: dict[str, Any]) -> None:
+            # A failed verification OR a rejected RETURN review becomes a NEW
+            # focused repair slice (rugged decomposition §13): a child of this one,
+            # visible on the board and independently verified in its own right —
+            # not an invisible in-place re-run. It carries the exact cause + any
+            # review feedback and inherits this slice's scope; a repair that itself
+            # fails chains one more bounded repair (max_repairs - 1) before giving up.
             child.add_log(
                 doer.name,
-                f"Claimed done, but verification failed: {detail}. "
-                f"Spawning a repair slice (repair budget {max_repairs}).",
+                f"Not accepted: {cause}. Spawning a repair slice "
+                f"(repair budget {max_repairs}).",
             )
             repair = run_goal_task(
                 board,
                 child,
-                goal=_repair_goal(goal, detail),
+                goal=_repair_goal(goal, cause),
                 acceptance_criteria=acceptance_criteria,
                 work_kind=work_kind,
                 brain=brain,
                 broker=broker,
-                context={**context, "verification_failure": detail},
+                context={**context, **extra},
                 max_steps=max_steps,
                 intent=f"repair: {intent or goal}",
                 contract_metadata=contract_metadata,
                 max_repairs=max_repairs - 1,
                 review_return=review_return,
+                scored_return=scored_return,
             )
             if repair.status is TaskStatus.DONE:
-                # The repair verified, so this slice's goal is now met on the branch.
                 child.transition(TaskStatus.DONE)
                 _retire("done")
                 parent.add_log(
@@ -327,18 +295,77 @@ def run_goal_task(
                 parent.add_log(
                     "Orchestrator",
                     f"{spec.kind} subtask {child.id} blocked: repair slice "
-                    f"{repair.id} did not verify ({detail}).",
+                    f"{repair.id} did not resolve ({cause}).",
+                )
+
+        if not ok:
+            if max_repairs > 0:
+                _repair(detail, {"verification_failure": detail})
+            else:
+                child.add_log(doer.name, f"Claimed done, but verification failed: {detail}")
+                child.transition(TaskStatus.BLOCKED)
+                _retire("blocked")
+                parent.transition(TaskStatus.BLOCKED)
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} blocked: claimed done but "
+                    f"verification failed: {detail}",
                 )
         else:
-            child.add_log(doer.name, f"Claimed done, but verification failed: {detail}")
-            child.transition(TaskStatus.BLOCKED)
-            _retire("blocked")
-            parent.transition(TaskStatus.BLOCKED)
-            parent.add_log(
-                "Orchestrator",
-                f"{spec.kind} subtask {child.id} blocked: claimed done but "
-                f"verification failed: {detail}",
-            )
+            # The verifier proved the work RUNS. Optionally promote the RETURN edge
+            # to a council review of WHAT came back — semantic (review_return: three
+            # lenses) or scored + Security with a ship threshold (scored_return,
+            # gap A) — before it integrates. A rejected return is not a dead end:
+            # with repairs enabled it drives a repair slice carrying the review
+            # feedback (gap B); without, it blocks with the lens reasons rather than
+            # integrating questionable work on green tests alone.
+            review = None
+            if scored_return:
+                from orac.plan_review import review_return_scored  # noqa: PLC0415
+
+                review = review_return_scored(
+                    goal, acceptance_criteria, result.summary, brain, task=child
+                )
+            elif review_return:
+                from orac.plan_review import review_return as _review_return_edge  # noqa: PLC0415
+
+                review = _review_return_edge(
+                    goal, acceptance_criteria, result.summary, brain, task=child
+                )
+            if review is not None and review.status is not CapabilityStatus.ALLOWED:
+                child.add_log(
+                    "Council",
+                    f"RETURN review did not accept the slice "
+                    f"({review.status.value}): {review.reason}",
+                )
+                # Persist the per-lens verdicts so the rejection is visible in the
+                # review cockpit and counts in `orac metrics` (gap E feeds on this).
+                if broker.store is not None:
+                    broker.store.record_review(
+                        CapabilityRequest(
+                            agent="Council", tool="return_review", task_id=child.id, args={}
+                        ),
+                        review,
+                    )
+                if max_repairs > 0:
+                    _repair(f"RETURN review: {review.reason}", {"review_feedback": review.reason})
+                else:
+                    child.transition(TaskStatus.BLOCKED)
+                    _retire("blocked")
+                    parent.transition(TaskStatus.BLOCKED)
+                    parent.add_log(
+                        "Orchestrator",
+                        f"{spec.kind} subtask {child.id} blocked by RETURN review: "
+                        f"{review.reason}",
+                    )
+            else:
+                child.transition(TaskStatus.DONE)
+                _retire("done")
+                reviewed = " + RETURN review" if review is not None else ""
+                parent.add_log(
+                    "Orchestrator",
+                    f"{spec.kind} subtask {child.id} done (verified{reviewed}): {result.summary}",
+                )
     elif result.status == "pending":
         # Parked for approval: still live (holds its roster slot) until resolved.
         child.park_for_approval(result.pending_id, TaskStatus.IN_PROGRESS)

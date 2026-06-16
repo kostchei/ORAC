@@ -183,6 +183,158 @@ Reply with ONE JSON object and nothing else:
 {"decision": "pass|escalate|block", "reason": "<one short sentence>"}"""
 
 
+# The SCORED RETURN edge (gap A): the same returned-work review, but with a
+# fourth Security lens and a 1-10 score per lens aggregated to a weighted total
+# against a ship threshold, plus a hard security floor. Used on the `code` path
+# (work.py), where returned work is security-relevant and "good enough to ship"
+# needs a number, not just an absence of vetoes. The 3-lens unscored review_return
+# above stays the reviewer for the general orchestrated RETURN edge.
+
+SHIP_THRESHOLD = 7.0
+
+# (lens display name, persona slug, weight). Weights mirror the harness rubric
+# (functionality / quality / security / edge), mapped onto ORAC's lenses.
+_SCORED_RETURN_LENSES: tuple[tuple[str, str, float], ...] = (
+    ("Intent", "intent", 0.30),       # functionality: does it serve the goal?
+    ("Simple", "simples", 0.25),      # code quality / shape
+    ("Security", "security", 0.25),   # security
+    ("Efficiency", "efficiency", 0.20),  # waste / edge cases
+)
+
+# Security has no agent profile (it is a review lens, never a doer that calls the
+# broker), so its persona is inline rather than loaded from agents.json — it holds
+# no grant by construction, like every other lens.
+_SECURITY_PERSONA = (
+    "You are ORAC's Security reviewer. You judge returned work solely for security "
+    "weaknesses, plainly and without softening. You do not implement; you assess."
+)
+
+_SECURITY_FOCUS = (
+    "Does the returned work introduce a security weakness — a mutating path left "
+    "unauthenticated, unvalidated user input, a hardcoded secret or a secret written "
+    "to logs, SSRF / SQL-injection / command-injection, or over-broad CORS? A real "
+    "vulnerability is a hard fail (decision=block or score=1), not a warning."
+)
+
+RETURN_SCORE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["pass", "block", "escalate"]},
+        "score": {"type": "integer", "minimum": 1, "maximum": 10},
+        "reason": {"type": "string"},
+    },
+    "required": ["decision", "score", "reason"],
+    "additionalProperties": False,
+}
+
+_SCORED_RETURN_PROTOCOL = """\
+You are ONE review lens scoring the WORK A SUBAGENT RETURNED for a slice (its done
+claim already passed an independent verifier — tests run green). Judge ONLY through
+your lens's focus below, and give an honest 1-10 score for your dimension (10 =
+production-ready; 7 = ships with minor gaps; below 5 = do not ship).
+
+Reply with ONE JSON object and nothing else:
+{"decision": "pass|escalate|block", "score": <1-10>, "reason": "<one short sentence>"}"""
+
+
+def _parse_scored(reply: str) -> tuple[LensDecision, int, str]:
+    """Parse a scored lens reply. Fail closed: a missing/unparseable decision or
+    an out-of-range/absent score is ESCALATE at score 1, never a silent pass."""
+    obj = _parse_json_object(reply)
+    if obj is None or obj.get("decision") not in {"pass", "block", "escalate"}:
+        return LensDecision.ESCALATE, 1, f"could not produce a usable verdict: {reply[:160]!r}"
+    score = obj.get("score")
+    if not isinstance(score, int) or isinstance(score, bool) or not (1 <= score <= 10):
+        return LensDecision.ESCALATE, 1, f"missing or out-of-range score: {reply[:160]!r}"
+    return LensDecision(str(obj["decision"])), score, str(obj.get("reason", "")).strip()
+
+
+def review_return_scored(
+    goal: str,
+    acceptance_criteria: tuple[str, ...],
+    evidence: str,
+    brain: Brain,
+    *,
+    task: Task | None = None,
+    threshold: float = SHIP_THRESHOLD,
+) -> CouncilVerdict:
+    """Four scored lenses over a slice's RETURNED work, aggregated to a verdict.
+
+    Precedence (fail-closed throughout):
+      1. Security floor — Security lens blocks, or its score is 1 -> DENIED.
+      2. Any lens BLOCK -> DENIED.
+      3. Any lens ESCALATE, or weighted total < ``threshold`` -> PENDING.
+      4. Otherwise -> ALLOWED.
+    The weighted total and per-lens scores are recorded in the reason and on each
+    LensVerdict.score. Requires a structured-output brain.
+    """
+    think_json = getattr(brain, "think_json", None)
+    if not callable(think_json):
+        raise RuntimeError(
+            "Scored return review requires a brain with structured output (think_json)."
+        )
+    personas = _personas()
+    seed = task or Task(title="return-review", description=goal)
+    criteria = "\n".join(f"  - {c}" for c in acceptance_criteria) or "  - (none given)"
+    verdicts: list[LensVerdict] = []
+    weighted = 0.0
+    security_verdict: LensVerdict | None = None
+    for name, slug, weight in _SCORED_RETURN_LENSES:
+        persona = _SECURITY_PERSONA if slug == "security" else personas[slug]
+        focus = _SECURITY_FOCUS if slug == "security" else _RETURN_FOCUS[name]
+        prompt = (
+            f"{persona}\n\n"
+            f"{_SCORED_RETURN_PROTOCOL}\n\n"
+            f"YOUR LENS ({name}) FOCUS: {focus}\n\n"
+            f"SLICE GOAL: {goal}\n"
+            f"ACCEPTANCE CRITERIA:\n{criteria}\n"
+            f"RETURNED EVIDENCE:\n{evidence[:1500]}\n\n"
+            f"Your verdict as the {name} lens:"
+        )
+        reply = think_json(name, slug, seed, prompt, RETURN_SCORE_SCHEMA)
+        decision, score, reason = _parse_scored(reply)
+        verdict = LensVerdict(
+            lens=name, decision=decision, reason=f"{name}: {reason}", score=score
+        )
+        verdicts.append(verdict)
+        weighted += score * weight
+        if name == "Security":
+            security_verdict = verdict
+
+    lenses = tuple(verdicts)
+    breakdown = ", ".join(f"{v.lens} {v.score}" for v in verdicts)
+    total_text = f"weighted {weighted:.1f}/10 ({breakdown})"
+
+    # 1. Security floor — overrides everything, even a high weighted total.
+    if security_verdict is not None and (
+        security_verdict.decision is LensDecision.BLOCK or security_verdict.score == 1
+    ):
+        return CouncilVerdict(
+            status=CapabilityStatus.DENIED, lenses=lenses,
+            reason=f"security floor: {security_verdict.reason} [{total_text}]",
+        )
+    blocks = [v for v in verdicts if v.decision is LensDecision.BLOCK]
+    if blocks:
+        return CouncilVerdict(
+            status=CapabilityStatus.DENIED, lenses=lenses,
+            reason="; ".join(v.reason for v in blocks) + f" [{total_text}]",
+        )
+    escalations = [v for v in verdicts if v.decision is LensDecision.ESCALATE]
+    if escalations or weighted < threshold:
+        below = "" if not (weighted < threshold) else f"below ship threshold {threshold}"
+        reasons = "; ".join(v.reason for v in escalations) or below
+        if escalations and below:
+            reasons = f"{reasons}; {below}"
+        return CouncilVerdict(
+            status=CapabilityStatus.PENDING, lenses=lenses,
+            reason=f"{reasons} [{total_text}]",
+        )
+    return CouncilVerdict(
+        status=CapabilityStatus.ALLOWED, lenses=lenses,
+        reason=f"return review: ships [{total_text}]",
+    )
+
+
 def review_return(
     goal: str,
     acceptance_criteria: tuple[str, ...],

@@ -69,6 +69,11 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # Stash push/pop set aside and restore uncommitted work: local, reversible.
     "git.stash": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "git.stash_pop": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # Step checkpoints (gap D): checkpoint writes only a dangling git object (no
+    # tree mutation); restore returns the tree to a snapshot the session itself
+    # made — local and reversible (checkpoint again before restoring). Both auto.
+    "repo.checkpoint": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "repo.restore_checkpoint": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
 }
 
 

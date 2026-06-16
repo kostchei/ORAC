@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,11 +16,12 @@ from orac.tooling import ToolResult
 # outside them. These are the code-creation capabilities that make ORAC able to
 # help build the rest of itself (docs/roadmap.md Milestone A).
 
-READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status"})
+READ_TOOLS = frozenset({"repo.read_file", "repo.search", "git.status", "repo.checkpoint"})
 WRITE_TOOLS = frozenset(
     {
         "repo.write_file",
         "repo.edit_file",
+        "repo.restore_checkpoint",
         "git.create_branch",
         "git.commit",
         "git.push",
@@ -64,6 +67,8 @@ class CodeAdapterSet:
             "git.stash": self.stash,
             "git.stash_pop": self.stash_pop,
             "git.status": self.status,
+            "repo.checkpoint": self.checkpoint,
+            "repo.restore_checkpoint": self.restore_checkpoint,
         }
 
     # --- path guards ------------------------------------------------------
@@ -93,13 +98,21 @@ class CodeAdapterSet:
 
     # --- subprocess helpers ----------------------------------------------
 
-    def _run(self, args: list[str], root: Path, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        args: list[str],
+        root: Path,
+        timeout: int = 120,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            args, cwd=root, capture_output=True, text=True, timeout=timeout
+            args, cwd=root, capture_output=True, text=True, timeout=timeout, env=env
         )
 
-    def _git(self, root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        proc = self._run(["git", *args], root)
+    def _git(
+        self, root: Path, *args: str, check: bool = True, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        proc = self._run(["git", *args], root, env=env)
         if check and proc.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
         return proc
@@ -330,6 +343,93 @@ class CodeAdapterSet:
                 "sha": sha,
                 "detail": proc.stderr.strip(),
             },
+        )
+
+    # --- shadow-repo step checkpoints (gap D) -----------------------------
+
+    def _snapshot_tree_commit(self, root: Path, label: str) -> str:
+        """Capture the FULL current worktree (tracked changes + untracked files,
+        minus .gitignore'd paths) as a dangling commit object — without touching
+        HEAD, the real index, or the working tree.
+
+        Built on a throwaway index (``GIT_INDEX_FILE``): seed it from HEAD, stage
+        everything (`add -A`, which also stages deletions and respects .gitignore),
+        write the tree, and commit-tree it with HEAD as parent. The returned sha is
+        a complete snapshot we can later restore to. No shell — Windows-safe.
+        """
+        head = self._git(root, "rev-parse", "HEAD").stdout.strip()
+        fd, tmp_index = tempfile.mkstemp(dir=str(root / ".git"), prefix="orac-ckpt-index.")
+        os.close(fd)
+        env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
+        try:
+            self._git(root, "read-tree", head, env=env)
+            self._git(root, "add", "-A", env=env)
+            tree = self._git(root, "write-tree", env=env).stdout.strip()
+        finally:
+            try:
+                os.unlink(tmp_index)
+            except OSError:
+                pass
+        commit = self._git(
+            root,
+            "-c", "user.name=ORAC Builder",
+            "-c", "user.email=builder@orac.local",
+            "commit-tree", tree, "-p", head, "-m", f"[orac-checkpoint] {label}",
+        ).stdout.strip()
+        return commit
+
+    def checkpoint(self, req: CapabilityRequest) -> ToolResult:
+        """Record a restorable snapshot of the working tree before a risky edit.
+
+        Non-destructive: it writes only a dangling git object, never the tree —
+        so it is classified ``auto`` and never trips the council. The companion
+        ``repo.restore_checkpoint`` returns the tree to this exact state, which is
+        what makes 'checkpoint-first / reversible' literally true at every step,
+        not only at commit boundaries.
+        """
+        root = self._root_for(req.args.get("root"))
+        label = str(req.args.get("label", "orac-checkpoint"))
+        sha = self._snapshot_tree_commit(root, label)
+        return ToolResult(
+            "repo.checkpoint",
+            f"Checkpointed working tree as {sha[:8]} ({label!r}).",
+            {"root": str(root), "sha": sha, "label": label},
+        )
+
+    def restore_checkpoint(self, req: CapabilityRequest) -> ToolResult:
+        """Return the working tree to a checkpoint sha exactly: revert modified and
+        deleted files to the checkpoint, and remove files added since it.
+
+        Exactness is achieved by snapshotting the current full tree the same way
+        and diffing it against the checkpoint, so untracked-but-new files (the
+        Builder's just-written files) are detected and removed too — a plain
+        ``git checkout`` cannot do that.
+        """
+        root = self._root_for(req.args.get("root"))
+        sha = str(req.args["sha"])
+        if self._git(root, "cat-file", "-t", sha, check=False).stdout.strip() != "commit":
+            raise ValueError(f"repo.restore_checkpoint: {sha!r} is not a checkpoint commit.")
+        # Files present now but absent in the checkpoint (compare two full snapshots
+        # so untracked additions are seen): these must be removed.
+        now = self._snapshot_tree_commit(root, "restore-scan")
+        added = [
+            line for line in self._git(
+                root, "diff", "--name-only", "--diff-filter=A", sha, now
+            ).stdout.splitlines() if line.strip()
+        ]
+        # Restore modified/deleted tracked content to the checkpoint state.
+        self._git(root, "checkout", sha, "--", ".")
+        removed: list[str] = []
+        for rel in added:
+            target = (root / rel)
+            if target.is_file():
+                target.unlink()
+                removed.append(rel)
+        return ToolResult(
+            "repo.restore_checkpoint",
+            f"Restored working tree to checkpoint {sha[:8]} "
+            f"({len(removed)} file(s) since-added removed).",
+            {"root": str(root), "sha": sha, "removed": removed},
         )
 
     # --- test adapter -----------------------------------------------------

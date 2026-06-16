@@ -257,9 +257,12 @@ class ReviewContext:
 class LensVerdict:
     """One lens's verdict on a ReviewContext."""
 
-    lens: str                # "Intent" | "Optimise" | "Simple" | "Efficiency"
+    lens: str                # "Intent" | "Optimise" | "Simple" | "Efficiency" | "Security"
     decision: LensDecision
     reason: str
+    # Scalar 1-10 quality score; only the scored RETURN review sets it (the
+    # deterministic edge lenses leave it None). Used for the weighted ship gate.
+    score: int | None = None
 
 
 @dataclass(frozen=True)
