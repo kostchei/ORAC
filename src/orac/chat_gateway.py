@@ -280,6 +280,7 @@ class ChatGateway:
         note = bstore.get_notification(note_id)
         sha = note.data.get("sha")
         contract = note.data.get("rollback_contract")
+        root = str(note.data.get("root") or self.store.root.resolve())
         if not sha:
             if contract:
                 from orac.rollback_contract import RollbackContractError, apply_rollback
@@ -294,12 +295,28 @@ class ChatGateway:
                 if not note.acked:
                     bstore.ack_notification(note.id)
                 return f"{message}\nRolled back and acked [{note.id}] {note.tool}."
+            checkpoint_sha = bstore.latest_checkpoint(note.task_id, root)
+            if checkpoint_sha:
+                adapters = code_adapters_for((root,), store=bstore)
+                req = _rollback_request(note, root, "repo.restore_checkpoint", {"root": root, "sha": checkpoint_sha})
+                result = adapters["repo.restore_checkpoint"](req)
+                bstore.record_audit(
+                    req,
+                    CapabilityResult(
+                        status=CapabilityStatus.ALLOWED,
+                        tool=result.name,
+                        message=result.message,
+                        data=result.data,
+                    ),
+                )
+                if not note.acked:
+                    bstore.ack_notification(note.id)
+                return f"{result.message}\nRolled back and acked [{note.id}] {note.agent}/{note.tool}."
             return (
-                f"Notification [{note.id}] has no recorded commit sha or rollback "
-                "contract; nothing to undo automatically."
+                f"Notification [{note.id}] has no recorded commit sha, rollback "
+                "contract, or checkpoint; nothing to undo automatically."
             )
-        root = str(note.data.get("root") or self.store.root.resolve())
-        adapters = code_adapters_for((root,))
+        adapters = code_adapters_for((root,), store=bstore)
         req = _rollback_request(note, root, "git.revert", {"root": root, "sha": sha})
         result = adapters["git.revert"](req)
         bstore.record_audit(

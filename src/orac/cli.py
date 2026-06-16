@@ -757,19 +757,36 @@ def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
         return 1
     sha = note.data.get("sha")
     contract = note.data.get("rollback_contract")
+    root = str(note.data.get("root") or store.root.resolve())
     if not sha:
-        # Non-git action: roll back via its RollbackContract if it recorded one;
-        # otherwise there is nothing to undo automatically (human-in-the-loop).
         if contract:
             return _rollback_via_contract(bstore, store, note, contract)
+        checkpoint_sha = bstore.latest_checkpoint(note.task_id, root)
+        if checkpoint_sha:
+            adapters = code_adapters_for((root,), store=bstore)
+            req = _rollback_request(note, root, "repo.restore_checkpoint", {"root": root, "sha": checkpoint_sha})
+            result = adapters["repo.restore_checkpoint"](req)
+            bstore.record_audit(
+                req,
+                CapabilityResult(
+                    status=CapabilityStatus.ALLOWED,
+                    tool=result.name,
+                    message=result.message,
+                    data=result.data,
+                ),
+            )
+            print(result.message)
+            if not note.acked:
+                bstore.ack_notification(note.id)
+            print(f"Rolled back and acked [{note.id}] {note.agent} {note.tool}.")
+            return 0
         print(
-            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha or "
-            "rollback contract; nothing to undo automatically. Undo it manually, "
+            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha, "
+            "rollback contract, or checkpoint; nothing to undo automatically. Undo it manually, "
             f"then `orac ack {note.id}`."
         )
         return 1
-    root = str(note.data.get("root") or store.root.resolve())
-    adapters = code_adapters_for((root,))
+    adapters = code_adapters_for((root,), store=bstore)
 
     req = _rollback_request(note, root, "git.revert", {"root": root, "sha": sha})
     result = adapters["git.revert"](req)

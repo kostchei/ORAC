@@ -10,6 +10,7 @@ from pathlib import Path
 from orac.adapters import Adapter
 from orac.models import CapabilityRequest
 from orac.tooling import ToolResult
+from orac.broker_store import BrokerStore
 
 # The Builder's real tools: read/search/write code, run tests, and checkpoint via
 # git. Writes are confined to approved repo roots; nothing here may touch a path
@@ -52,6 +53,7 @@ class CodeAdapterSet:
 
     approved_roots: tuple[Path, ...]
     base_branch: str = "main"
+    store: BrokerStore | None = None
 
     def adapters(self) -> dict[str, Adapter]:
         return {
@@ -95,6 +97,31 @@ class CodeAdapterSet:
         if root not in self.approved_roots:
             raise PermissionError(f"Root {root} is not an approved repo root.")
         return root
+
+    def _root_containing_path(self, path: Path) -> Path:
+        for root in self.approved_roots:
+            if path == root or root in path.parents:
+                return root
+        raise PermissionError(f"Path {path} is outside approved repo roots.")
+
+    def _auto_checkpoint(self, task_id: str, root: Path) -> None:
+        if self.store is None:
+            return
+        if not task_id:
+            return
+        resolved_root_str = str(root.resolve())
+        existing = self.store.latest_checkpoint(task_id, resolved_root_str)
+        if existing is not None:
+            return
+        try:
+            self._git(root, "rev-parse", "--verify", "HEAD")
+        except Exception:
+            return
+        try:
+            sha = self._snapshot_tree_commit(root, f"auto-checkpoint for task {task_id}")
+            self.store.record_checkpoint(task_id, resolved_root_str, sha, label="auto-checkpoint")
+        except Exception:
+            pass
 
     # --- subprocess helpers ----------------------------------------------
 
@@ -170,6 +197,8 @@ class CodeAdapterSet:
 
     def write_file(self, req: CapabilityRequest) -> ToolResult:
         path = self._resolve_in_root(req.args["path"])
+        root = self._root_containing_path(path)
+        self._auto_checkpoint(req.task_id, root)
         content = req.args["content"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -206,6 +235,8 @@ class CodeAdapterSet:
                 f"repo.edit_file: 'old' text occurs {count}x in {path}; it must be "
                 "unique. Include more surrounding context to disambiguate."
             )
+        root = self._root_containing_path(path)
+        self._auto_checkpoint(req.task_id, root)
         path.write_text(text.replace(old, new), encoding="utf-8")
         return ToolResult(
             "repo.edit_file",
@@ -451,7 +482,7 @@ class CodeAdapterSet:
 
 
 def code_adapters_for(
-    roots: tuple[Path | str, ...], base_branch: str = "main"
+    roots: tuple[Path | str, ...], base_branch: str = "main", store: BrokerStore | None = None
 ) -> dict[str, Adapter]:
     resolved = tuple(Path(r).resolve() for r in roots)
-    return CodeAdapterSet(resolved, base_branch=base_branch).adapters()
+    return CodeAdapterSet(resolved, base_branch=base_branch, store=store).adapters()

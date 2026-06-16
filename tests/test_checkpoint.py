@@ -84,3 +84,108 @@ def test_checkpoint_does_not_touch_head_or_working_tree(tmp_path) -> None:
     assert head_before == head_after  # checkpoint left HEAD untouched
     # working tree unchanged (only the tracked file + gitignore present)
     assert (tmp_path / "mod.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
+
+
+def test_auto_checkpoint_on_first_write(tmp_path) -> None:
+    from orac.broker_store import BrokerStore
+    from orac.broker import ToolBroker
+    from orac.models import Task, TaskStatus
+
+    # Initialize a git repo with a commit
+    (tmp_path / ".gitignore").write_text(".orac/\n", encoding="utf-8")
+    (tmp_path / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+
+    (tmp_path / ".orac").mkdir()
+    store = BrokerStore(tmp_path).init()
+    # Grant permissions so it doesn't get pending-gated
+    store.grant("Builder", "repo.write_file")
+    
+    broker = ToolBroker.from_store(store, repo_root=tmp_path)
+    task = Task(id="task-abc", title="feature", status=TaskStatus.IN_PROGRESS)
+
+    # First write should trigger auto-checkpoint
+    req1 = CapabilityRequest(
+        agent="Builder",
+        tool="repo.write_file",
+        task_id=task.id,
+        args={"path": "mod.py", "content": "x = 2\n"},
+    )
+    broker.request(req1, task)
+
+    # Verify checkpoint is recorded
+    root_str = str(tmp_path.resolve())
+    ckpt_sha = store.latest_checkpoint(task.id, root_str)
+    assert ckpt_sha is not None
+
+    # Subsequent write should NOT create a new checkpoint (should keep the original pre-mutation one)
+    req2 = CapabilityRequest(
+        agent="Builder",
+        tool="repo.write_file",
+        task_id=task.id,
+        args={"path": "mod.py", "content": "x = 3\n"},
+    )
+    broker.request(req2, task)
+
+    # The recorded checkpoint SHA should remain unchanged
+    ckpt_sha2 = store.latest_checkpoint(task.id, root_str)
+    assert ckpt_sha2 == ckpt_sha
+
+
+def test_rollback_via_checkpoint(tmp_path) -> None:
+    from orac.broker_store import BrokerStore
+    from orac.broker import ToolBroker
+    from orac.models import Task, TaskStatus, CapabilityResult, CapabilityStatus
+    from orac.cli import cmd_rollback
+    import argparse
+
+    # Initialize a git repo with a commit
+    (tmp_path / ".gitignore").write_text(".orac/\n", encoding="utf-8")
+    (tmp_path / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+
+    (tmp_path / ".orac").mkdir()
+    store = BrokerStore(tmp_path).init()
+    store.grant("Builder", "repo.write_file")
+    
+    broker = ToolBroker.from_store(store, repo_root=tmp_path)
+    task = Task(id="task-xyz", title="feature", status=TaskStatus.IN_PROGRESS)
+
+    # First write triggers auto-checkpoint (capturing x = 1)
+    req1 = CapabilityRequest(
+        agent="Builder",
+        tool="repo.write_file",
+        task_id=task.id,
+        args={"path": "mod.py", "content": "x = 2\n"},
+    )
+    res1 = broker.request(req1, task)
+    assert (tmp_path / "mod.py").read_text(encoding="utf-8") == "x = 2\n"
+
+    # We record a notification without a sha or rollback contract, which represents a step that has no commit yet.
+    # We want rollback to restore to the latest checkpoint.
+    # Create notification for res1
+    note_id = store.record_notification(req1, CapabilityResult(status=CapabilityStatus.ALLOWED, tool="repo.write_file", message="Wrote file"))
+
+    # Verify rollback
+    # We construct a mock BoardStore because cli cmd_rollback takes a BoardStore (which has root)
+    from orac.storage import BoardStore
+    board = BoardStore(tmp_path)
+    
+    # Run CLI command rollback for the notification id
+    args = argparse.Namespace(id=note_id, push=False)
+    exit_code = cmd_rollback(board, args)
+    assert exit_code == 0
+
+    # Verify working tree is rolled back to checkpoint state (x = 1)
+    assert (tmp_path / "mod.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert store.get_notification(note_id).acked

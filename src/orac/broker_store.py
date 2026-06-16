@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS subagents (
     status         TEXT NOT NULL DEFAULT 'active',
     resolved_at    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    root        TEXT NOT NULL,
+    sha         TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT ''
+);
 """
 
 # The roster cap. This is both the deterministic admission limit AND the number
@@ -756,3 +765,24 @@ class BrokerStore:
             status=row["status"],
             resolved_at=row["resolved_at"],
         )
+
+    # --- checkpoints (gap D) -----------------------------------------------
+
+    def record_checkpoint(self, task_id: str, root: str, sha: str, label: str = "") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO checkpoints (created_at, task_id, root, sha, label) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (now_iso(), task_id, str(Path(root).resolve()), sha, label),
+            )
+
+    def latest_checkpoint(self, task_id: str, root: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT sha FROM checkpoints "
+                "WHERE task_id = ? AND root = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (task_id, str(Path(root).resolve())),
+            ).fetchone()
+        return row[0] if row else None
+

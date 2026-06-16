@@ -99,19 +99,21 @@ class ToolBroker:
             executor=executor or RegularToolExecutor(),
             grants=store.grants(),
             known_tools=cls._known_tools(),
-            adapters=cls._adapters(repo_root),
+            adapters=cls._adapters(repo_root, store=store),
             store=store,
             council=Council(store=store, llm=llm),
         )
 
     @staticmethod
-    def _adapters(repo_root: Path | str | None) -> dict[str, Adapter]:
+    def _adapters(
+        repo_root: Path | str | None, store: BrokerStore | None = None
+    ) -> dict[str, Adapter]:
         adapters = default_adapters()
         # Read-only, repo-independent: the frontend verifier needs only a running
         # browser, not an approved repo root, so it is always available.
         adapters.update(browser_adapters())
         if repo_root is not None:
-            adapters.update(code_adapters_for((repo_root,)))
+            adapters.update(code_adapters_for((repo_root,), store=store))
             adapters.update(fs_adapters_for(repo_root))
             from orac.comms_adapters import comms_adapters_for
             adapters.update(comms_adapters_for(repo_root))
