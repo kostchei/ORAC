@@ -33,11 +33,28 @@ function normalizeTarget(raw) {
   return `${digits}@s.whatsapp.net`;
 }
 
+function digitsOf(jid) {
+  // Strip the "@server" suffix and any ":device" part, leaving bare digits.
+  const user = (String(jid || "").split("@", 1)[0] || "").split(":", 1)[0];
+  return user.replace(/[^\d]/g, "");
+}
+
 function normalizeSender(jid) {
-  const value = String(jid || "");
-  const user = (value.split("@", 1)[0] || value).split(":", 1)[0];
-  const digits = user.replace(/[^\d]/g, "");
-  return digits ? `+${digits}` : value;
+  const digits = digitsOf(jid);
+  return digits ? `+${digits}` : String(jid || "");
+}
+
+// The security boundary: ORAC only acts on the SELF-CHAT ("Message yourself"),
+// the only conversation that is addressed to ORAC rather than to another person.
+// A message to a friend or in a group is the operator's private conversation and
+// must never be treated as an instruction — nor even ingested (it would otherwise
+// land in ORAC's comms log). Fail closed: if our own identity is not yet known,
+// ingest nothing.
+function isSelfChat(remoteJid, ownNumber) {
+  const jid = String(remoteJid || "");
+  if (!jid.endsWith("@s.whatsapp.net")) return false; // groups/broadcasts never
+  if (!ownNumber) return false;
+  return digitsOf(jid) === ownNumber;
 }
 
 async function startSocket() {
@@ -74,8 +91,12 @@ async function startSocket() {
   });
 
   sock.ev.on("messages.upsert", ({ messages }) => {
+    const ownNumber = digitsOf(sock?.user?.id);
     for (const msg of messages || []) {
       if (!msg.message || sentMessageIds.has(msg.key.id)) continue;
+      // Only the self-chat drives ORAC. Drop everything else before reading its
+      // text so private conversations are never buffered, logged, or acted on.
+      if (!isSelfChat(msg.key.remoteJid, ownNumber)) continue;
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
