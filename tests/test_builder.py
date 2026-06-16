@@ -40,9 +40,20 @@ def test_only_builder_holds_write_grants() -> None:
     broker = ToolBroker.from_manifests()
 
     assert WRITE_TOOLS <= broker.grants["Builder"]
-    for reviewer in ("Intent", "Optimiser", "Simples", "Efficiency", "Orchestrator"):
+    for reviewer in ("Intent", "Optimiser", "Simples", "Efficiency", "Orchestrator", "Messenger"):
         assert not (WRITE_TOOLS & broker.grants.get(reviewer, frozenset())), (
             f"{reviewer} must not hold any write grant"
+        )
+
+
+def test_only_messenger_holds_comms_grants() -> None:
+    broker = ToolBroker.from_manifests()
+    comms_tools = {"channel.read", "channel.draft", "channel.send"}
+
+    assert comms_tools <= broker.grants["Messenger"]
+    for agent in ("Intent", "Optimiser", "Simples", "Efficiency", "Orchestrator", "Builder"):
+        assert not (comms_tools & broker.grants.get(agent, frozenset())), (
+            f"{agent} must not hold any comms grant"
         )
 
 

@@ -89,6 +89,12 @@ def apply_rollback(contract: dict[str, Any]) -> str:
         if path.exists():
             path.unlink()
         return f"Removed {path} (it did not exist before the action)."
+    if operation == "channel.post_correction":
+        state = inverse.get("state_before") or {}
+        target = state.get("target", "?")
+        raise RollbackContractError(
+            f"cannot auto-undo; send a correction to {target}, then ack."
+        )
     raise RollbackContractError(
         f"no automatic rollback for inverse operation {operation!r}; manual undo required."
     )

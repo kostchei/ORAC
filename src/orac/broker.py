@@ -113,6 +113,8 @@ class ToolBroker:
         if repo_root is not None:
             adapters.update(code_adapters_for((repo_root,)))
             adapters.update(fs_adapters_for(repo_root))
+            from orac.comms_adapters import comms_adapters_for
+            adapters.update(comms_adapters_for(repo_root))
         return adapters
 
     @staticmethod
@@ -201,7 +203,7 @@ class ToolBroker:
         result = self._dispatch(req, task)
         if self.store is not None:
             self.store.bump_rate(req.agent, req.tool, today_utc())
-            if mode is ApprovalMode.NOTIFY or standing_granted:
+            if mode in (ApprovalMode.NOTIFY, ApprovalMode.APPROVE) or standing_granted:
                 self.store.record_notification(req, result)
         return result
 

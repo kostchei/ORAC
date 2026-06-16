@@ -209,6 +209,24 @@
       "description": "Write a file under .orac/outputs/ (outside version control); records a rollback contract so the action can be undone from the review queue.",
       "regular_use": "Builder writes an output artifact git cannot track; the non-git rollback contract makes it reversible via `orac rollback`.",
       "inputs": ["task_id", "path", "content"]
+    },
+    {
+      "name": "channel.read",
+      "description": "Read recent messages for a channel and target.",
+      "regular_use": "Read inbound messages for a given target on slack or whatsapp.",
+      "inputs": ["task_id", "channel", "target"]
+    },
+    {
+      "name": "channel.draft",
+      "description": "Record the proposed message as a reviewable artifact (journaling).",
+      "regular_use": "Record the proposed message text for a target on slack or whatsapp.",
+      "inputs": ["task_id", "channel", "target", "text"]
+    },
+    {
+      "name": "channel.send",
+      "description": "Send a message to a recipient/channel on slack or whatsapp.",
+      "regular_use": "Send a message via slack or whatsapp backend after approval.",
+      "inputs": ["task_id", "channel", "target", "text"]
     }
   ]
 }

@@ -55,6 +55,16 @@
       "protocol_file": "builder_build_max.json",
       "tools": ["repo.read_file", "repo.search", "repo.write_file", "repo.edit_file", "repo.run_tests", "browser.verify_local_app", "git.create_branch", "git.commit", "git.push", "git.revert", "git.stash", "git.stash_pop", "git.status", "repo.checkpoint", "repo.restore_checkpoint", "fs.write_external_file"],
       "order": 60
+    },
+    {
+      "slug": "messenger",
+      "name": "Messenger",
+      "kind": "doer",
+      "purpose": "The only agent that communicates with the external world. Drafts, reviews, and sends messages via Slack and WhatsApp.",
+      "prompt_file": "messenger.md",
+      "protocol_file": "messenger_max.json",
+      "tools": ["channel.read", "channel.draft", "channel.send"],
+      "order": 70
     }
   ]
 }

@@ -79,6 +79,11 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # it lands in the review queue with its RollbackContract; reversible via that
     # contract, not via a commit sha.
     "fs.write_external_file": RiskClass(Reversibility.REVERSIBLE, Externality.EXTERNAL_PRIVATE),
+    # Comms capability: channel.read and draft are local reversible auto-run.
+    # channel.send is irreversible external private, requiring explicit approval.
+    "channel.read": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "channel.draft": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "channel.send": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PRIVATE),
 }
 
 
