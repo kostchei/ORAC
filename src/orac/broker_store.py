@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS reviews (
     task_id     TEXT NOT NULL,
     lens        TEXT NOT NULL,
     decision    TEXT NOT NULL,
-    reason      TEXT NOT NULL
+    reason      TEXT NOT NULL,
+    score       INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -236,6 +237,12 @@ class BrokerStore:
                 "ALTER TABLE notifications "
                 "ADD COLUMN data_json TEXT NOT NULL DEFAULT '{}'"
             )
+        reviews_columns = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}
+        if "score" not in reviews_columns:
+            conn.execute(
+                "ALTER TABLE reviews "
+                "ADD COLUMN score INTEGER"
+            )
 
     def _seed_manifest_grants(self, conn: sqlite3.Connection) -> None:
         existing = conn.execute("SELECT COUNT(*) FROM grants").fetchone()[0]
@@ -350,8 +357,8 @@ class BrokerStore:
         with self._connect() as conn:
             conn.executemany(
                 "INSERT INTO reviews "
-                "(created_at, agent, tool, task_id, lens, decision, reason) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(created_at, agent, tool, task_id, lens, decision, reason, score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         now_iso(),
@@ -361,6 +368,7 @@ class BrokerStore:
                         lens.lens,
                         lens.decision.value,
                         lens.reason,
+                        lens.score,
                     )
                     for lens in verdict.lenses
                 ],
