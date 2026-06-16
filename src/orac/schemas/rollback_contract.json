@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RollbackContract",
+  "description": "Standardized undo state a non-git mutating tool must record so its action can be rolled back. git-reversible actions use git.revert instead and do not need this.",
+  "type": "object",
+  "required": ["target_resource", "idempotency_key", "inverse_operation"],
+  "properties": {
+    "target_resource": {
+      "description": "Stable identifier for the external state being mutated.",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "description": "Unique key so applying the rollback twice is a no-op.",
+      "type": "string"
+    },
+    "inverse_operation": {
+      "description": "How to undo the action.",
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "description": "Name of the inverse the rollback dispatcher knows how to apply.",
+          "type": "string"
+        },
+        "state_before": {
+          "description": "Full prior state to restore (FullRollbackPayload form).",
+          "type": "object"
+        },
+        "patches": {
+          "description": "Reverse patches to apply (PartialStateRestoration form).",
+          "type": "array"
+        }
+      }
+    }
+  }
+}

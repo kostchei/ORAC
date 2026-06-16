@@ -53,7 +53,7 @@
       "purpose": "The only agent that writes the system's code. Builds on branches, checkpoint-first; the council plans and reviews but never writes.",
       "prompt_file": "builder.md",
       "protocol_file": "builder_build_max.json",
-      "tools": ["repo.read_file", "repo.search", "repo.write_file", "repo.edit_file", "repo.run_tests", "browser.verify_local_app", "git.create_branch", "git.commit", "git.push", "git.revert", "git.stash", "git.stash_pop", "git.status", "repo.checkpoint", "repo.restore_checkpoint"],
+      "tools": ["repo.read_file", "repo.search", "repo.write_file", "repo.edit_file", "repo.run_tests", "browser.verify_local_app", "git.create_branch", "git.commit", "git.push", "git.revert", "git.stash", "git.stash_pop", "git.status", "repo.checkpoint", "repo.restore_checkpoint", "fs.write_external_file"],
       "order": 60
     }
   ]

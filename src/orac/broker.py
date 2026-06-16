@@ -9,6 +9,7 @@ from orac.browser_adapters import browser_adapters
 from orac.agent_registry import load_agent_profiles, load_tool_specs
 from orac.broker_store import BrokerStore
 from orac.code_adapters import code_adapters_for
+from orac.fs_adapters import fs_adapters_for
 from orac.council import Council, today_utc
 from orac.llm import Brain
 from orac.models import (
@@ -111,6 +112,7 @@ class ToolBroker:
         adapters.update(browser_adapters())
         if repo_root is not None:
             adapters.update(code_adapters_for((repo_root,)))
+            adapters.update(fs_adapters_for(repo_root))
         return adapters
 
     @staticmethod

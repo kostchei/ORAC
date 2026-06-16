@@ -203,6 +203,12 @@
       "description": "Restore the working tree exactly to a checkpoint sha: revert edits, restore deletions, remove files added since.",
       "regular_use": "Builder rolls back to a checkpoint when an edit went wrong, before trying a different approach.",
       "inputs": ["task_id", "root", "sha"]
+    },
+    {
+      "name": "fs.write_external_file",
+      "description": "Write a file under .orac/outputs/ (outside version control); records a rollback contract so the action can be undone from the review queue.",
+      "regular_use": "Builder writes an output artifact git cannot track; the non-git rollback contract makes it reversible via `orac rollback`.",
+      "inputs": ["task_id", "path", "content"]
     }
   ]
 }

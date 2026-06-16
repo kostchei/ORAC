@@ -122,19 +122,21 @@ def test_recover_restores_last_good_backup(tmp_path) -> None:
     assert store.load().created_at == "last-good"
 
 
-def test_concurrent_load_modify_save_raises_stale(tmp_path) -> None:
+def test_concurrent_independent_writes_merge(tmp_path) -> None:
     store = BoardStore(tmp_path)
     store.init()
-    # Two writers (daemon tick, UI server) load the same revision.
+    # Two writers (daemon tick, UI server) load the same revision and each add a
+    # different task. The later save no longer destroys the other's work, nor does
+    # it fail: because the changes do not conflict, the event-log 3-way merge folds
+    # both in transparently. (A true same-task conflict still raises — see
+    # test_event_log_merge.)
     a = store.load()
     b = store.load()
     b.add_task(Task(title="from-b"))
     store.save(b)
     a.add_task(Task(title="from-a"))
-    # a's save would silently destroy b's task; it must raise instead.
-    with pytest.raises(StaleBoardError):
-        store.save(a)
-    assert [task.title for task in store.load().tasks] == ["from-b"]
+    store.save(a)
+    assert sorted(task.title for task in store.load().tasks) == ["from-a", "from-b"]
 
 
 def test_sequential_saves_of_same_board_keep_working(tmp_path) -> None:

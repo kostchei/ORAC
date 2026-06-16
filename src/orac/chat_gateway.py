@@ -279,10 +279,24 @@ class ChatGateway:
         bstore = BrokerStore(self.store.root).init()
         note = bstore.get_notification(note_id)
         sha = note.data.get("sha")
+        contract = note.data.get("rollback_contract")
         if not sha:
+            if contract:
+                from orac.rollback_contract import RollbackContractError, apply_rollback
+
+                try:
+                    message = apply_rollback(contract)
+                except RollbackContractError as exc:
+                    return (
+                        f"Notification [{note.id}] cannot be rolled back automatically: "
+                        f"{exc} Undo manually, then ack {note.id}."
+                    )
+                if not note.acked:
+                    bstore.ack_notification(note.id)
+                return f"{message}\nRolled back and acked [{note.id}] {note.tool}."
             return (
-                f"Notification [{note.id}] has no recorded commit sha; "
-                "nothing to revert automatically."
+                f"Notification [{note.id}] has no recorded commit sha or rollback "
+                "contract; nothing to undo automatically."
             )
         root = str(note.data.get("root") or self.store.root.resolve())
         adapters = code_adapters_for((root,))

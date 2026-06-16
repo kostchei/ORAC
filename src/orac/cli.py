@@ -713,6 +713,41 @@ def _rollback_request(
     return CapabilityRequest(agent="human", tool=tool, task_id=note.task_id, args=call_args)
 
 
+def _rollback_via_contract(
+    bstore: BrokerStore, store: BoardStore, note: Notification, contract: dict
+) -> int:
+    """Roll back a non-git action by applying its RollbackContract's inverse. If
+    the inverse is not automatable, fall to the human-in-the-loop path: name the
+    target and the manual step rather than guessing."""
+    from orac.rollback_contract import RollbackContractError, apply_rollback
+
+    try:
+        message = apply_rollback(contract)
+    except RollbackContractError as exc:
+        target = contract.get("target_resource", "?")
+        print(
+            f"Notification [{note.id}] ({note.tool}) cannot be rolled back "
+            f"automatically: {exc}\n"
+            f"Manual undo required for {target}, then `orac ack {note.id}`."
+        )
+        return 1
+    req = _rollback_request(note, str(store.root.resolve()), note.tool, {})
+    bstore.record_audit(
+        req,
+        CapabilityResult(
+            status=CapabilityStatus.ALLOWED,
+            tool="rollback.contract",
+            message=message,
+            data={"target_resource": contract.get("target_resource")},
+        ),
+    )
+    print(message)
+    if not note.acked:
+        bstore.ack_notification(note.id)
+    print(f"Rolled back and acked [{note.id}] {note.agent} {note.tool}.")
+    return 0
+
+
 def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
     bstore = BrokerStore(store.root).init()
     try:
@@ -721,10 +756,16 @@ def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
         print(str(exc))
         return 1
     sha = note.data.get("sha")
+    contract = note.data.get("rollback_contract")
     if not sha:
+        # Non-git action: roll back via its RollbackContract if it recorded one;
+        # otherwise there is nothing to undo automatically (human-in-the-loop).
+        if contract:
+            return _rollback_via_contract(bstore, store, note, contract)
         print(
-            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha; "
-            "nothing to revert automatically. Revert manually, then `orac ack`."
+            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha or "
+            "rollback contract; nothing to undo automatically. Undo it manually, "
+            f"then `orac ack {note.id}`."
         )
         return 1
     root = str(note.data.get("root") or store.root.resolve())

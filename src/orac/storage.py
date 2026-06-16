@@ -7,6 +7,7 @@ import tempfile
 import time
 from typing import Any
 
+from orac.event_log_merge import BoardMergeConflict, merge_boards
 from orac.models import Board, now_iso
 
 if os.name == "nt":
@@ -186,9 +187,15 @@ class BoardStore:
                 old_data = current
                 current_revision = int(current.get("revision", 0))
                 if board.revision != current_revision:
-                    raise StaleBoardError(
-                        self.board_path, board.revision, current_revision
-                    )
+                    # A concurrent writer committed since this board was loaded.
+                    # Rather than fail, attempt a transparent 3-way merge: the
+                    # event log holds the snapshot at our loaded revision (the
+                    # common ancestor), the file is theirs, the in-memory board is
+                    # ours. Non-conflicting changes from both sides are kept; a
+                    # genuine per-task conflict (or a missing ancestor we cannot
+                    # merge against) still raises StaleBoardError. Safe inside the
+                    # lock: nobody else can write until we release it.
+                    self._merge_in_place(board, ancestor_rev=board.revision, theirs=current)
             board.updated_at = now_iso()
             data = board.to_dict()
             # Only adopt the new revision in memory once the write lands, so a
@@ -246,6 +253,35 @@ class BoardStore:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
+
+    def _event_board_at(self, revision: int) -> dict[str, Any] | None:
+        """The full board snapshot committed at ``revision`` from the event log,
+        or None if no such event exists (e.g. the log was truncated)."""
+        for event in self.read_events():
+            if int(event.get("revision", -1)) == revision:
+                return event.get("board")
+        return None
+
+    def _merge_in_place(
+        self, board: Board, ancestor_rev: int, theirs: dict[str, Any]
+    ) -> None:
+        """Reconcile ``board`` (ours) with the concurrent ``theirs`` on disk, using
+        the event-log snapshot at ``ancestor_rev`` as the common ancestor. On
+        success ``board`` is updated in place with the merged tasks so the caller
+        can write it at the current revision. A missing ancestor or a true per-task
+        conflict raises StaleBoardError (the 'raise on conflict' rule)."""
+        their_rev = int(theirs.get("revision", 0))
+        ancestor = self._event_board_at(ancestor_rev)
+        if ancestor is None:
+            # No common ancestor to merge against — fail loudly rather than guess.
+            raise StaleBoardError(self.board_path, ancestor_rev, their_rev)
+        try:
+            merged = merge_boards(ancestor, theirs, board.to_dict())
+        except BoardMergeConflict as exc:
+            raise StaleBoardError(self.board_path, ancestor_rev, their_rev) from exc
+        merged_board = Board.from_dict(merged)
+        board.tasks = merged_board.tasks
+        board.created_at = merged_board.created_at
 
     def read_events(self) -> list[dict[str, Any]]:
         """All board events in commit order. Tolerant of a torn final line (a

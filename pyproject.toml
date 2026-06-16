@@ -31,7 +31,7 @@ orac = "orac.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-orac = ["prompts/*.json", "prompts/*.md", "tools/*.json", "ui/*.html", "ui/*.css", "ui/*.js", "browser_selectors.json"]
+orac = ["prompts/*.json", "prompts/*.md", "tools/*.json", "schemas/*.json", "ui/*.html", "ui/*.css", "ui/*.js", "browser_selectors.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

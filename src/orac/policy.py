@@ -74,6 +74,11 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # made — local and reversible (checkpoint again before restoring). Both auto.
     "repo.checkpoint": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "repo.restore_checkpoint": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # First non-git mutating tool: writes outside version control, so git.revert
+    # cannot undo it. Treated as external (escapes git's safety net) -> notify, so
+    # it lands in the review queue with its RollbackContract; reversible via that
+    # contract, not via a commit sha.
+    "fs.write_external_file": RiskClass(Reversibility.REVERSIBLE, Externality.EXTERNAL_PRIVATE),
 }
 
 
@@ -166,6 +171,7 @@ _PATH_BEARING_TOOLS: dict[str, str] = {
     "repo.write_file": "path",   # whole-file mutation
     "repo.edit_file": "path",    # surgical mutation
     "git.commit": "paths",       # making the change durable (list of paths)
+    "fs.write_external_file": "path",  # external write (confined to .orac/outputs)
 }
 
 
