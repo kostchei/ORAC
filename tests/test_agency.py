@@ -215,9 +215,9 @@ def test_non_code_kind_without_doer_blocks_visibly(tmp_path) -> None:
 
     child = run_goal_task(
         board, parent,
-        goal="draft a status update to the operator",
-        acceptance_criteria=("draft exists",),
-        work_kind="comms",
+        goal="render a beautiful status image",
+        acceptance_criteria=("image exists",),
+        work_kind="media",
         brain=ScriptedBrain([]),  # must never be consulted: no doer exists
         broker=broker, context={},
     )
@@ -225,6 +225,67 @@ def test_non_code_kind_without_doer_blocks_visibly(tmp_path) -> None:
     assert child.status == TaskStatus.BLOCKED
     assert parent.status == TaskStatus.BLOCKED
     assert "no doer" in child.work_log[-1].message.lower()
+
+
+def test_comms_kind_runs_successfully(tmp_path) -> None:
+    broker, store = _setup(tmp_path)
+    board = Board()
+    parent = Task(title="update operator", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+
+    # Enable slack comms and mock credentials
+    from orac.storage import BoardStore
+    board_store = BoardStore(tmp_path)
+    board_store.init()
+
+    from orac.chat_config import save_chat_config
+    chat_cfg = {
+        "enabled": True,
+        "channels": {
+            "slack": {
+                "enabled": True,
+                "authorized_senders": [],
+                "bot_token_ref": "chat.slack.bot_token",
+            }
+        }
+    }
+    save_chat_config(board_store, chat_cfg)
+
+    from orac.credentials import CredentialStore
+    CredentialStore(tmp_path).set("chat.slack.bot_token", "fake-token")
+
+    # Inject mock comms adapters
+    from orac.comms_adapters import comms_adapters_for
+    class FakeCommsBackend:
+        def read(self, target): return []
+        def send(self, target, text): return "msg_123"
+    adapters = comms_adapters_for(tmp_path, slack_backend=FakeCommsBackend())
+    broker.adapters.update(adapters)
+
+    brain_script = [
+        json.dumps({
+            "tool": "channel.draft",
+            "args": {"channel": "slack", "target": "C123", "text": "here is my draft"}
+        }),
+        json.dumps({
+            "done": True,
+            "summary": "Draft created successfully."
+        })
+    ]
+
+    child = run_goal_task(
+        board, parent,
+        goal="draft a status update to the operator",
+        acceptance_criteria=("draft exists",),
+        work_kind="comms",
+        brain=ScriptedBrain(brain_script),
+        broker=broker, context={},
+    )
+
+    assert child.status == TaskStatus.DONE
+    assert parent.status == TaskStatus.IN_PROGRESS
+    assert any("Draft created successfully" in log.message for log in parent.work_log)
+
 
 
 def test_driver_originates_locked_ready_task_from_telemetry(tmp_path) -> None:

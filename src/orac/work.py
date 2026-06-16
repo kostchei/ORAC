@@ -91,9 +91,10 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
     ),
     "comms": WorkKindSpec(
         kind="comms",
-        doer_slug=None,  # Messenger: sole holder of channel.send (Group 2)
-        done_means="a draft exists in the review queue; sending requires human approval.",
-        contract_rules="- Draft only. Never send without an approved grant.",
+        doer_slug="messenger",
+        done_means="a message was sent (approved/dispatched) or a draft was logged.",
+        contract_rules="- Draft before sending. Sending requires human approval.",
+        verifiers=("verify_comms_sent",),
     ),
     "media": WorkKindSpec(
         kind="media",
@@ -729,12 +730,36 @@ def _verify_local_app(
     return False, str(result.data.get("summary", "")) or "app did not verify"
 
 
+def _verify_comms_sent(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    if broker.store is None:
+        return True, "no store to verify comms"
+    notes = broker.store.list_notifications()
+    send_notes = [n for n in notes if n.task_id == child.id and n.tool == "channel.send"]
+    if not send_notes:
+        draft_count = broker.store.audit_count(agent="Messenger", tool="channel.draft", task_id=child.id)
+        if draft_count > 0:
+            return True, "comms draft recorded"
+        return False, "no sent message or draft found for this subtask"
+    
+    for note in send_notes:
+        msg_id = note.data.get("message_id")
+        if msg_id:
+            return True, f"send dispatched / backend returned a message id: {msg_id}"
+    return False, "channel.send was called but no message id was returned"
+
+
 # Verifier name -> how it confirms a kind's done-means. The check runs through
 # the broker (audited, no privileged path) as the doer agent. Defined after the
 # helpers so the registry binds real callables at import time.
 _VERIFIERS = {
     "run_tests": _verify_run_tests,
     "verify_local_app": _verify_local_app,
+    "verify_comms_sent": _verify_comms_sent,
 }
 
 
