@@ -270,3 +270,43 @@ def test_driver_fault_surfaces_as_blocked_task(tmp_path) -> None:
     faults = [t for t in board.tasks if t.metadata.get("origin") == "optimise-driver-fault"]
     assert len(faults) == 1
     assert faults[0].status == TaskStatus.BLOCKED
+
+
+def test_session_injects_memory_and_captures_a_skill(tmp_path) -> None:
+    from orac.knowledge import KnowledgeBase, Skill
+
+    broker, store = _setup(tmp_path)
+    kb = KnowledgeBase(tmp_path)
+    kb.memory.add("memory", "this repo's tests run with pytest")
+    kb.skills.save(Skill(name="code: prior", description="how to add a module test", tags=["code"]))
+
+    brain = ScriptedBrain(_builder_script(tmp_path))
+    task = Task(title="build a module with tests", status=TaskStatus.IN_PROGRESS, work_kind="code")
+
+    result = AgentSession(
+        profile=_builder_profile(), brain=brain, broker=broker, knowledge=kb
+    ).run(task, contract="GOAL: add a tiny module with a passing test.")
+
+    assert result.status == "done"
+    # Memory + the matching prior skill were injected into the model's prompt.
+    assert "pytest" in brain.prompts[0]
+    assert "LEARNED SKILLS" in brain.prompts[0]
+    # The matched prior skill was marked used (the cheap half of "patched in use").
+    assert kb.skills.get("code: prior").uses == 1
+    # The 5-tool-call session earned a fresh, reusable skill on disk.
+    captured = [s for s in kb.skills.load_all() if s.source_task == task.id]
+    assert len(captured) == 1
+    assert captured[0].procedure  # a real method, synthesised from the transcript
+
+
+def test_session_without_knowledge_is_unchanged(tmp_path) -> None:
+    broker, _ = _setup(tmp_path)
+    brain = ScriptedBrain(_builder_script(tmp_path))
+    task = Task(title="build", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: add a tiny module with a passing test."
+    )
+
+    assert result.status == "done"
+    assert not (tmp_path / ".orac" / "skills").exists()  # no knowledge wired, no writes
