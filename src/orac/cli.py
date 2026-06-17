@@ -19,6 +19,7 @@ from orac.agent_registry import (
 )
 from orac.intent_backbone import SPEC, IntentBackbone, IntentField
 from orac.intent_gate import IntentGate
+from orac.knowledge import KnowledgeBase, MemoryStore
 from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
     ModelPolicyStore,
@@ -159,6 +160,31 @@ def make_parser() -> argparse.ArgumentParser:
     lenses_sub.add_parser(
         "eval", help="Score the lenses against curated cases on the local lens model."
     )
+
+    memory = subparsers.add_parser(
+        "memory", help="Persistent cross-session memory the agents curate (MEMORY.md / USER.md)."
+    )
+    memory_sub = memory.add_subparsers(dest="memory_command", required=True)
+    memory_sub.add_parser("show", help="Print the memory snapshot injected at session start.")
+    mem_add = memory_sub.add_parser("add", help="Add an entry to a memory file.")
+    mem_add.add_argument("text", help="The fact or preference to remember.")
+    mem_add.add_argument(
+        "--target", choices=list(MemoryStore.TARGETS), default="memory",
+        help="'memory' = environment/workflow facts; 'user' = operator identity/preferences.",
+    )
+    mem_remove = memory_sub.add_parser("remove", help="Remove matching text from a memory file.")
+    mem_remove.add_argument("text", help="Substring to remove.")
+    mem_remove.add_argument(
+        "--target", choices=list(MemoryStore.TARGETS), default="memory",
+    )
+
+    skills = subparsers.add_parser(
+        "skills", help="Reusable skills the agents capture from experience (SKILL.md files)."
+    )
+    skills_sub = skills.add_subparsers(dest="skills_command", required=True)
+    skills_sub.add_parser("list", help="List captured skills, newest-used first.")
+    skills_show = skills_sub.add_parser("show", help="Print one skill's SKILL.md.")
+    skills_show.add_argument("name", help="Skill name or slug (from `orac skills list`).")
 
     reviews = subparsers.add_parser(
         "reviews",
@@ -586,6 +612,52 @@ def cmd_lenses_eval(store: BoardStore) -> int:
     brain = lens_brain(ModelPolicyStore(store))
     print(f"Evaluating lenses on local model {brain.model!r} ...")
     return print_scorecard(run_lens_eval(brain))
+
+
+def cmd_memory_show(store: BoardStore) -> int:
+    memory = MemoryStore(store.root)
+    snapshot = memory.render_for_prompt()
+    if not snapshot:
+        print(f"No memory recorded yet (files under {memory.dir}).")
+        return 0
+    print(snapshot)
+    return 0
+
+
+def cmd_memory_add(store: BoardStore, args: argparse.Namespace) -> int:
+    result = MemoryStore(store.root).add(args.target, args.text)
+    print(result.message)
+    if result.overflow and result.current:
+        print("\nCurrent entries (consolidate these):")
+        print(result.current)
+    return 0 if result.ok else 1
+
+
+def cmd_memory_remove(store: BoardStore, args: argparse.Namespace) -> int:
+    result = MemoryStore(store.root).remove(args.target, args.text)
+    print(result.message)
+    return 0 if result.ok else 1
+
+
+def cmd_skills_list(store: BoardStore) -> int:
+    skills = KnowledgeBase(store.root).skills.load_all()
+    if not skills:
+        print("No skills captured yet. They accrue from multi-step doer sessions.")
+        return 0
+    for skill in sorted(skills, key=lambda s: (s.uses, s.updated_at), reverse=True):
+        tags = f" [{', '.join(skill.tags)}]" if skill.tags else ""
+        print(f"{skill.slug}  (v{skill.version}, used {skill.uses}x){tags}")
+        print(f"  {skill.description}")
+    return 0
+
+
+def cmd_skills_show(store: BoardStore, args: argparse.Namespace) -> int:
+    skill = KnowledgeBase(store.root).skills.get(args.name)
+    if skill is None:
+        print(f"No skill named {args.name!r}. Try `orac skills list`.")
+        return 1
+    print(skill.to_markdown())
+    return 0
 
 
 # How many lens verdicts the default `orac reviews` view shows.
@@ -1055,6 +1127,16 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models_verify(store)
     if args.command == "lenses" and args.lenses_command == "eval":
         return cmd_lenses_eval(store)
+    if args.command == "memory" and args.memory_command == "show":
+        return cmd_memory_show(store)
+    if args.command == "memory" and args.memory_command == "add":
+        return cmd_memory_add(store, args)
+    if args.command == "memory" and args.memory_command == "remove":
+        return cmd_memory_remove(store, args)
+    if args.command == "skills" and args.skills_command == "list":
+        return cmd_skills_list(store)
+    if args.command == "skills" and args.skills_command == "show":
+        return cmd_skills_show(store, args)
     if args.command == "reviews":
         return cmd_reviews(store, args)
     if args.command == "approve":

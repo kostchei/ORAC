@@ -131,6 +131,32 @@ orac standing revoke <id>
 
 A pre-authorised action still dispatches *and* lands in the review queue (you see it after the fact, with rollback). A standing grant only short-circuits the risk model's approval park — it **never** waives the council's safety floor: the Sentinel self-modification gate, the fair-share band, and the churn/duplicate lenses all still apply. The system cannot grant itself permission to edit its own governor.
 
+## Knowledge: memory and self-improving skills
+
+Doer sessions start fresh by design, so on their own they re-learn the repo's
+conventions and re-derive the same method every run. The knowledge layer carries
+that forward — a Hermes-inspired (Nous Research) persistent **memory** plus a
+self-improving **skills** library, kept as plain Markdown under `.orac/` and
+injected into a session's prompt at the start of a run. It is fully offline and
+deterministic; no new dependencies.
+
+```powershell
+orac memory show                                   # the snapshot injected at session start
+orac memory add "Tests run with pytest from the repo root"
+orac memory add --target user "Operator prefers concise replies"
+orac memory remove "Tests run with pytest from the repo root"
+
+orac skills list                                   # skills captured from experience
+orac skills show <name-or-slug>
+```
+
+When a doer finishes `done` after five or more tool calls, ORAC synthesises a
+reusable `SKILL.md` from the session's own transcript (the working tool sequence
+becomes the procedure; denied/errored steps become pitfalls), patching an
+existing skill of the same name rather than duplicating it. Matched skills
+injected into a successful run have their use count bumped, so proven skills rank
+higher next time. See [docs/knowledge.md](docs/knowledge.md).
+
 ## LM Studio
 
 ORAC expects LM Studio's local OpenAI-compatible server at `http://localhost:1234/v1` by default. When ORAC starts, it starts the LM Studio server if the `lms` CLI is available. If a local model is already loaded, ORAC keeps it. If no model is loaded, ORAC checks available RAM and loads the largest suitable local model it can fit within the resource policy, preferring tool-use models when possible.
@@ -176,6 +202,6 @@ If Ollama is unavailable, use `--brain rules` for the built-in offline brain.
 - Efficiency looks for waste, dead code, and unnecessary structure.
 - Simples finds the most effective path with the least number of components.
 
-Agent prompts and JSON-style protocols live in `src/orac/prompts/`. Intent's executable backbone lives in `src/orac/intent_backbone.py`. Karpathy-inspired agent operating notes live in `docs/karpathy_agent_guidelines.md`. Regular-use tool definitions live in `src/orac/tools/catalog.json`, and their local implementations live in `src/orac/tooling.py`. The task registry lives in `src/orac/task_registry.py`, resource checks live in `src/orac/resources.py`, and model routing lives in `src/orac/model_policy.py`. The manifest at `src/orac/prompts/agents.json` binds each agent to its prompt, protocol, and allowed tools.
+Agent prompts and JSON-style protocols live in `src/orac/prompts/`. Intent's executable backbone lives in `src/orac/intent_backbone.py`. Karpathy-inspired agent operating notes live in `docs/karpathy_agent_guidelines.md`. Regular-use tool definitions live in `src/orac/tools/catalog.json`, and their local implementations live in `src/orac/tooling.py`. The task registry lives in `src/orac/task_registry.py`, resource checks live in `src/orac/resources.py`, and model routing lives in `src/orac/model_policy.py`. The persistent-memory and self-improving-skills layer lives in `src/orac/knowledge.py` (see [docs/knowledge.md](docs/knowledge.md)). The manifest at `src/orac/prompts/agents.json` binds each agent to its prompt, protocol, and allowed tools.
 
 This repo is intentionally small so the orchestration surface is easy to change as the agent system grows.

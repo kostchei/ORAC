@@ -8,6 +8,7 @@ from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
 from orac.broker_store import MAX_SUBAGENTS
 from orac.dispatch import both_agree
+from orac.knowledge import KnowledgeBase
 from orac.intent_ledger import (
     SLICE_BLOCKED,
     SLICE_OPEN,
@@ -140,6 +141,7 @@ def run_goal_task(
     contract_metadata: dict[str, Any] | None = None,
     max_repairs: int = 0,
     review_return: bool = False,
+    knowledge: KnowledgeBase | None = None,
 ) -> Task:
     """Spawn the kind's doer against a goal; the model decides how.
 
@@ -229,7 +231,9 @@ def run_goal_task(
         if broker.store is not None and subagent_id is not None:
             broker.store.set_subagent_status(subagent_id, status)
 
-    session = AgentSession(profile=doer, brain=brain, broker=broker, max_steps=max_steps)
+    session = AgentSession(
+        profile=doer, brain=brain, broker=broker, max_steps=max_steps, knowledge=knowledge
+    )
     try:
         result = session.run(child, contract)
     except Exception as exc:  # noqa: BLE001 - a subagent crash must free its lease
@@ -311,6 +315,7 @@ def run_goal_task(
                 contract_metadata=contract_metadata,
                 max_repairs=max_repairs - 1,
                 review_return=review_return,
+                knowledge=knowledge,
             )
             if repair.status is TaskStatus.DONE:
                 # The repair verified, so this slice's goal is now met on the branch.
@@ -379,6 +384,7 @@ def run_decomposed_goal(
     plan_brain: Brain | None = None,
     depth: int = 0,
     max_depth: int = 2,
+    knowledge: KnowledgeBase | None = None,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
@@ -464,7 +470,8 @@ def run_decomposed_goal(
                 child_brain=brain,
                 depth=depth + 1,
                 max_depth=max_depth,
-            )
+                knowledge=knowledge,
+            )  # recurse: knowledge flows into the nested fan-out
         else:
             child = run_goal_task(
                 board=board,
@@ -480,6 +487,7 @@ def run_decomposed_goal(
                 contract_metadata=contract_metadata or None,
                 max_repairs=max_repairs,
                 review_return=review_return,
+                knowledge=knowledge,
             )
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
@@ -509,6 +517,7 @@ def run_orchestrated_goal(
     child_brain: Brain | None = None,
     depth: int = 0,
     max_depth: int = 2,
+    knowledge: KnowledgeBase | None = None,
 ) -> list[Task]:
     """The full fan-out: propose a decomposition (with the abundance frame),
     review the plan (the counterweight), then dispatch each slice through the
@@ -603,7 +612,7 @@ def run_orchestrated_goal(
     return run_decomposed_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
         max_steps=max_steps, cap=cap, max_repairs=max_repairs, review_return=True,
-        plan_brain=brain, depth=depth, max_depth=max_depth,
+        plan_brain=brain, depth=depth, max_depth=max_depth, knowledge=knowledge,
     )
 
 
