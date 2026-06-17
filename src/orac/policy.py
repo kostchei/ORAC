@@ -80,6 +80,13 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "skill.patch": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "skill.write_file": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "skill.archive": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # Comms (Group 2). Reading and drafting are local and reversible; sending is
+    # the canonical irreversible-external action — a message cannot be unsent, so
+    # it parks for human approval (the throttle table maps IRREVERSIBLE +
+    # EXTERNAL_PRIVATE -> APPROVE). The gate precedes the send; there is no undo.
+    "channel.read": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "channel.draft": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "channel.send": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PRIVATE),
 }
 
 

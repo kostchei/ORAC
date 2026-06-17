@@ -91,9 +91,13 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
     ),
     "comms": WorkKindSpec(
         kind="comms",
-        doer_slug=None,  # Messenger: sole holder of channel.send (Group 2)
-        done_means="a draft exists in the review queue; sending requires human approval.",
-        contract_rules="- Draft only. Never send without an approved grant.",
+        doer_slug="messenger",  # Messenger: sole holder of channel.send (Group 2)
+        done_means="a message was sent (human-approved) or a draft was recorded for review.",
+        contract_rules=(
+            "- Draft before sending. channel.send is irreversible and parks for "
+            "human approval; a recorded draft is a valid done-state."
+        ),
+        verifiers=("verify_comms_sent",),
     ),
     "media": WorkKindSpec(
         kind="media",
@@ -702,12 +706,36 @@ def _verify_local_app(
     return False, str(result.data.get("summary", "")) or "app did not verify"
 
 
+def _verify_comms_sent(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Confirm a comms subtask reached its done-means via the audit log.
+
+    Done is either a human-approved send or, failing that, a recorded draft.
+    Read from the audit log (status='allowed') rather than the doer's word: a
+    ``channel.send`` only counts once approval cleared it (it is APPROVE-gated),
+    while a ``channel.draft`` is auto-run, so a parked send falls back to the
+    draft as a legitimate done-state.
+    """
+    if broker.store is None:
+        return True, "no store to verify comms (degraded no-DB path)"
+    if broker.store.audit_count("Messenger", "channel.send", child.id) > 0:
+        return True, "message sent (human-approved)"
+    if broker.store.audit_count("Messenger", "channel.draft", child.id) > 0:
+        return True, "draft recorded for review (send awaiting approval)"
+    return False, "no sent message or recorded draft for this comms subtask"
+
+
 # Verifier name -> how it confirms a kind's done-means. The check runs through
 # the broker (audited, no privileged path) as the doer agent. Defined after the
 # helpers so the registry binds real callables at import time.
 _VERIFIERS = {
     "run_tests": _verify_run_tests,
     "verify_local_app": _verify_local_app,
+    "verify_comms_sent": _verify_comms_sent,
 }
 
 

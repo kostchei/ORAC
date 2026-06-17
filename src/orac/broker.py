@@ -20,6 +20,7 @@ from orac.models import (
     ReviewContext,
     Task,
 )
+from orac.comms_adapters import comms_adapters_for
 from orac.policy import ApprovalMode, approval_mode_for, contract_denial, risk_class
 from orac.skills_adapters import skills_adapters_for
 from orac.tooling import RegularToolExecutor
@@ -116,6 +117,9 @@ class ToolBroker:
             # its mutations are contained to that tree and governed by name like
             # any other adapter (risk_class + council + grant).
             adapters.update(skills_adapters_for(repo_root))
+            # Comms (Group 2): channel.read/draft/send, governed by name. send is
+            # APPROVE-gated by the risk model, so registering it here is safe.
+            adapters.update(comms_adapters_for(repo_root))
         return adapters
 
     @staticmethod

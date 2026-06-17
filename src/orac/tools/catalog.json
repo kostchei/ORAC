@@ -233,6 +233,24 @@
       "description": "Retire a skill by moving it under .archive (recoverable). There is no hard-delete.",
       "regular_use": "Builder sets aside a superseded or consolidated skill without destroying it.",
       "inputs": ["task_id", "name", "absorbed_into"]
+    },
+    {
+      "name": "channel.read",
+      "description": "Read recent messages for a channel (slack/whatsapp) and target.",
+      "regular_use": "Messenger reads context before drafting a reply. Local, auto-run.",
+      "inputs": ["task_id", "channel", "target"]
+    },
+    {
+      "name": "channel.draft",
+      "description": "Record a proposed message as a reviewable artifact under .orac/outputs/comms (no send).",
+      "regular_use": "Messenger drafts before sending so a human can read it first. Local, auto-run.",
+      "inputs": ["task_id", "channel", "target", "text"]
+    },
+    {
+      "name": "channel.send",
+      "description": "Send a message to a target on slack or whatsapp. Irreversible external action.",
+      "regular_use": "Messenger sends a message; parks for human approval before it executes (no undo).",
+      "inputs": ["task_id", "channel", "target", "text"]
     }
   ]
 }
