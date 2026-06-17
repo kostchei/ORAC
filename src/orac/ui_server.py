@@ -200,6 +200,11 @@ def _make_handler(
             if path == "/api/reviews":
                 self._send_json(_reviews_payload(store))
                 return
+            if path == "/api/metrics":
+                from orac.metrics import compute_metrics
+
+                self._send_json(compute_metrics(BrokerStore(store.root).init()))
+                return
             self.send_error(404)
 
         def do_POST(self) -> None:

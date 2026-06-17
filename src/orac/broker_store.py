@@ -95,6 +95,12 @@ CREATE TABLE IF NOT EXISTS subagents (
     status         TEXT NOT NULL DEFAULT 'active',
     resolved_at    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS tunables (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # The roster cap. This is both the deterministic admission limit AND the number
@@ -756,3 +762,28 @@ class BrokerStore:
             status=row["status"],
             resolved_at=row["resolved_at"],
         )
+
+    # --- tunables (self-tuning knobs; performance only, never safety) -------
+
+    def get_tunable(self, key: str, default: str) -> str:
+        """Read a tunable's value, or ``default`` if it has never been set.
+
+        Tunables are performance knobs (e.g. the decomposition threshold) that
+        the self-tuning loop may adjust within hard bounds. They are deliberately
+        separate from grants and risk classes: tuning here can never weaken the
+        safety floor, only change how eagerly the system fans work out.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM tunables WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row is not None else default
+
+    def set_tunable(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO tunables (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (key, value, now_iso()),
+            )

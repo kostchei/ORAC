@@ -114,7 +114,17 @@ class Scrum:
             return True
         if flag is False:
             return False
-        if task.points > 1:
+        # The points threshold is self-tuned (Gap E): the loop raises it to fan
+        # out less eagerly when goals are blocking and lowers it back toward the
+        # baseline when they aren't. Bounded and notify-after — see self_tune.py.
+        from orac.self_tune import DECOMPOSE_THRESHOLD_DEFAULT, DECOMPOSE_THRESHOLD_KEY
+
+        threshold = int(
+            self.broker.store.get_tunable(
+                DECOMPOSE_THRESHOLD_KEY, str(DECOMPOSE_THRESHOLD_DEFAULT)
+            )
+        )
+        if task.points > threshold:
             return True
         return len((task.description or "").splitlines()) > 5
 

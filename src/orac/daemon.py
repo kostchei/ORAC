@@ -87,6 +87,12 @@ def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
         _record_browser_provider_cooldown(policy_store, exc)
         raise
     store.save_merging(board, base)
+    # Self-tuning loop (Gap E): read this tick's goal outcomes and adjust the
+    # decomposition threshold within hard bounds, auto-applied and recorded to the
+    # review-after queue. Performance knob only — it cannot touch the safety floor.
+    from orac.self_tune import maybe_self_tune  # noqa: PLC0415 (avoid import cycle)
+
+    maybe_self_tune(BrokerStore(store.root).init(), board)
     # Record MEASURED foundation spend (from real API token usage), not a flat
     # estimate. Drains 0 when the tick used only local/browser brains (both free).
     spent = drain_foundation_spend_usd()

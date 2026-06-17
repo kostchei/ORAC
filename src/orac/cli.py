@@ -173,6 +173,15 @@ def make_parser() -> argparse.ArgumentParser:
         help="Machine-readable output (e.g. for calibration tooling).",
     )
 
+    metrics = subparsers.add_parser(
+        "metrics",
+        help="Show governance metrics: brokered calls, lens escalations, queue, roster, tuning.",
+    )
+    metrics.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Machine-readable output (e.g. for lens calibration).",
+    )
+
     approve = subparsers.add_parser(
         "approve", help="Approve a pending request; the loop resumes the parked task."
     )
@@ -590,6 +599,18 @@ def cmd_lenses_eval(store: BoardStore) -> int:
 
 # How many lens verdicts the default `orac reviews` view shows.
 _RECENT_VERDICTS = 20
+
+
+def cmd_metrics(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.metrics import compute_metrics, render_metrics
+
+    bstore = BrokerStore(store.root).init()
+    m = compute_metrics(bstore)
+    if args.as_json:
+        print(json.dumps(m, indent=2, sort_keys=True))
+    else:
+        print(render_metrics(m))
+    return 0
 
 
 def cmd_reviews(store: BoardStore, args: argparse.Namespace) -> int:
@@ -1057,6 +1078,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_lenses_eval(store)
     if args.command == "reviews":
         return cmd_reviews(store, args)
+    if args.command == "metrics":
+        return cmd_metrics(store, args)
     if args.command == "approve":
         return cmd_approve(store, args, "approved")
     if args.command == "deny":
