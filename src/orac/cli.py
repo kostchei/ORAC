@@ -182,6 +182,15 @@ def make_parser() -> argparse.ArgumentParser:
         help="Machine-readable output (e.g. for lens calibration).",
     )
 
+    lessons = subparsers.add_parser(
+        "lessons",
+        help="Show the shared lessons fan-out slices recorded for a goal.",
+    )
+    lessons.add_argument("task_id", help="The goal (parent) task id the lessons are scoped to.")
+    lessons.add_argument(
+        "--json", action="store_true", dest="as_json", help="Machine-readable output.",
+    )
+
     approve = subparsers.add_parser(
         "approve", help="Approve a pending request; the loop resumes the parked task."
     )
@@ -610,6 +619,24 @@ def cmd_metrics(store: BoardStore, args: argparse.Namespace) -> int:
         print(json.dumps(m, indent=2, sort_keys=True))
     else:
         print(render_metrics(m))
+    return 0
+
+
+def cmd_lessons(store: BoardStore, args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    bstore = BrokerStore(store.root).init()
+    lessons = bstore.lessons_for(args.task_id, limit=200)
+    if args.as_json:
+        print(json.dumps([asdict(l) for l in lessons], indent=2, sort_keys=True))
+        return 0
+    if not lessons:
+        print(f"No shared lessons for goal {args.task_id!r}.")
+        return 0
+    print(f"Shared lessons for goal {args.task_id!r}:")
+    for lesson in lessons:
+        marker = "OK   " if lesson.kind == "result" else "AVOID"
+        print(f"  [{marker}] {lesson.text}")
     return 0
 
 
@@ -1080,6 +1107,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_reviews(store, args)
     if args.command == "metrics":
         return cmd_metrics(store, args)
+    if args.command == "lessons":
+        return cmd_lessons(store, args)
     if args.command == "approve":
         return cmd_approve(store, args, "approved")
     if args.command == "deny":

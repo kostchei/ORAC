@@ -8,6 +8,7 @@ from orac.agent_session import AgentSession
 from orac.broker import ToolBroker
 from orac.broker_store import MAX_SUBAGENTS
 from orac.dispatch import both_agree
+from orac.shared_lessons import record_slice_outcome, render_for_contract
 from orac.intent_ledger import (
     SLICE_BLOCKED,
     SLICE_OPEN,
@@ -210,13 +211,25 @@ def run_goal_task(
     child.assignee = doer.name
     parent.add_log("Orchestrator", f"Spawned {spec.kind} subtask {child.id}: {goal}")
 
+    # Shared lessons (DeLM-style cross-agent scratchpad) are injected as a
+    # dedicated contract block rather than a stray context line, and excluded from
+    # the generic CONTEXT render so they read as guidance, not data.
+    lessons_block = str(context.get("shared_lessons", "")).strip()
     contract = CONTRACT_TEMPLATE.format(
         goal=goal,
         criteria="\n".join(f"- {c}" for c in acceptance_criteria) or "- (none given)",
-        context="\n".join(f"- {k}: {v}" for k, v in context.items()) or "- (none)",
+        context="\n".join(
+            f"- {k}: {v}" for k, v in context.items() if k != "shared_lessons"
+        ) or "- (none)",
         rules=spec.contract_rules.format(task_id=child.id),
         done_means=spec.done_means,
     )
+    if lessons_block:
+        contract += (
+            "\nSHARED LESSONS (verified notes from sibling slices and prior "
+            "attempts — read before you start; build on [OK], avoid [AVOID]):\n"
+            f"{lessons_block}\n"
+        )
 
     # Admit the doer to the roster (the register). Recorded so the live free-count
     # behind the Orchestrator's abundance frame is honest.
@@ -425,6 +438,14 @@ def run_decomposed_goal(
             if key in slice_
         }
         slice_context = {**context, **dict(slice_.get("inputs", {}) or {})}
+        # Read-before: hand this slice the verified lessons sibling slices have
+        # already contributed for this goal, so it builds on what worked and
+        # avoids known dead ends (shared_lessons.py). Dispatch is sequential, so
+        # a later slice sees earlier slices' outcomes.
+        if broker.store is not None:
+            lessons_block = render_for_contract(broker.store, parent.id)
+            if lessons_block:
+                slice_context["shared_lessons"] = lessons_block
 
         # Subagent recursion (rugged decomposition §13): a slice flagged
         # ``decompose`` is itself large enough to fan out again rather than run as a
@@ -492,6 +513,11 @@ def run_decomposed_goal(
             pass  # slice stays open; it resolves when the approval does
         else:
             mark(parent, child.id, SLICE_BLOCKED)
+        # Write-verified-after: contribute this slice's settled outcome to the
+        # goal's shared scratchpad for the remaining slices (parked slices have no
+        # verified outcome yet, so record_slice_outcome no-ops on them).
+        if broker.store is not None:
+            record_slice_outcome(broker.store, parent.id, child)
         children.append(child)
 
     settle_parent_against_ledger(parent)

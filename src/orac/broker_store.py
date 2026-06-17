@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS tunables (
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_scope ON lessons (scope);
 """
 
 # The roster cap. This is both the deterministic admission limit AND the number
@@ -138,6 +147,23 @@ class Notification:
     data: dict[str, Any]
     acked: bool
     acked_at: str | None
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """One compact, verified cross-agent note within a goal's shared scratchpad.
+
+    ``scope`` is the goal (parent task id) the lesson belongs to; ``kind`` is
+    'result' (a verified success) or 'failure' (a verified dead end), so peer
+    slices can build on what worked and avoid what didn't (the DeLM shared-
+    context idea, scoped to one fan-out).
+    """
+
+    id: int
+    created_at: str
+    scope: str
+    kind: str
+    text: str
 
 
 @dataclass(frozen=True)
@@ -787,3 +813,38 @@ class BrokerStore:
                 "updated_at = excluded.updated_at",
                 (key, value, now_iso()),
             )
+
+    # --- shared lessons (per-goal cross-agent scratchpad) ------------------
+
+    def record_lesson(self, scope: str, kind: str, text: str) -> None:
+        """Append a verified note to a goal's shared scratchpad."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO lessons (created_at, scope, kind, text) VALUES (?, ?, ?, ?)",
+                (now_iso(), scope, kind, text),
+            )
+
+    def lessons_for(self, scope: str, limit: int = 20) -> list[Lesson]:
+        """The most recent lessons for a goal, returned oldest-first for reading.
+
+        Capped so a long-running fan-out cannot bloat a doer's contract; the most
+        recent ``limit`` are kept (recency = relevance), then ordered chronologically
+        so the reader sees how understanding accumulated.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM lessons WHERE scope = ? ORDER BY id DESC LIMIT ?",
+                (scope, limit),
+            ).fetchall()
+        lessons = [
+            Lesson(
+                id=row["id"],
+                created_at=row["created_at"],
+                scope=row["scope"],
+                kind=row["kind"],
+                text=row["text"],
+            )
+            for row in rows
+        ]
+        lessons.reverse()
+        return lessons
