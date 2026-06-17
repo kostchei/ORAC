@@ -6,6 +6,7 @@ from typing import Any
 
 from orac.agent_registry import AgentProfile, get_tool_map
 from orac.broker import ToolBroker
+from orac.knowledge import KnowledgeBase, Skill
 from orac.llm import Brain
 from orac.models import CapabilityRequest, CapabilityStatus, Task
 
@@ -68,8 +69,17 @@ class AgentSession:
     broker: ToolBroker
     max_steps: int = DEFAULT_MAX_STEPS
     transcript: list[str] = field(default_factory=list)
+    # A Hermes-style knowledge layer (optional): when present, the session reads
+    # what earlier sessions learned (memory + matched skills injected into the
+    # prompt) and writes a reusable skill back if it solves a multi-step task.
+    knowledge: KnowledgeBase | None = None
+    _injected_skills: list[Skill] = field(default_factory=list)
+    _preamble: str = ""
 
     def run(self, task: Task, contract: str) -> SessionResult:
+        if self.knowledge is not None:
+            block, self._injected_skills = self.knowledge.prompt_preamble(task)
+            self._preamble = f"{block}\n\n" if block else ""
         think_json = getattr(self.brain, "think_json", None)
         for step in range(1, self.max_steps + 1):
             if callable(think_json):
@@ -77,12 +87,12 @@ class AgentSession:
                     self.profile.name,
                     self.profile.slug,
                     task,
-                    self._prompt(contract),
+                    self._prompt(task, contract),
                     DECISION_SCHEMA,
                 )
             else:
                 reply = self.brain.think(
-                    self.profile.name, self.profile.slug, task, self._prompt(contract)
+                    self.profile.name, self.profile.slug, task, self._prompt(task, contract)
                 )
             decision = parse_decision(reply)
             if decision is None:
@@ -157,7 +167,7 @@ class AgentSession:
             ),
         )
 
-    def _prompt(self, contract: str) -> str:
+    def _prompt(self, task: Task, contract: str) -> str:
         tools = get_tool_map()
         specs = "\n".join(
             f"- {name}: {tools[name].description} (inputs: {', '.join(tools[name].inputs)})"
@@ -167,6 +177,7 @@ class AgentSession:
         history = "\n".join(self.transcript) if self.transcript else "(no actions yet)"
         return (
             f"{self.profile.system_prompt}\n\n"
+            f"{self._preamble}"
             f"{PROTOCOL}\n\n"
             f"YOUR TOOLS:\n{specs}\n\n"
             f"CONTRACT:\n{contract}\n\n"
@@ -179,7 +190,32 @@ class AgentSession:
             self.profile.name,
             f"Session {result.status} after {result.steps} step(s): {result.summary}",
         )
+        self._learn(task, result)
         return result
+
+    def _learn(self, task: Task, result: SessionResult) -> None:
+        """The Hermes learning loop: on a successful, multi-step session, record
+        the matched skills as used and capture a new skill from the transcript.
+
+        Best-effort — a knowledge write must never turn a finished task into a
+        failure, so any error here is swallowed (the work already stands)."""
+        if self.knowledge is None:
+            return
+        try:
+            for skill in self._injected_skills:
+                self.knowledge.skills.record_use(skill)
+            if result.status == "done":
+                captured = self.knowledge.capture_from_session(
+                    task, self.transcript, summary=result.summary
+                )
+                if captured is not None:
+                    task.add_log(
+                        self.profile.name,
+                        f"Captured reusable skill {captured.name!r} "
+                        f"(v{captured.version}) from this session.",
+                    )
+        except Exception as exc:  # noqa: BLE001 — learning is never load-bearing
+            task.add_log("system", f"Skill capture skipped ({type(exc).__name__}: {exc}).")
 
 
 def parse_decision(reply: str) -> dict[str, Any] | None:

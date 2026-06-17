@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orac.broker import ToolBroker
 from orac.broker_store import BrokerStore
@@ -9,6 +10,9 @@ from orac.intent_gate import IntentGate
 from orac.intent_ledger import has_ledger
 from orac.llm import Brain
 from orac.models import Board, Task, TaskStatus
+
+if TYPE_CHECKING:
+    from orac.knowledge import KnowledgeBase
 
 
 @dataclass
@@ -50,6 +54,16 @@ class Scrum:
         from orac.storage import BoardStore
 
         return lens_brain(ModelPolicyStore(BoardStore(self.root)))
+
+    def _knowledge(self) -> "KnowledgeBase | None":
+        """The Hermes-style memory + skills layer, rooted at the project state
+        dir. Active whenever there is a durable root (orthogonal to model
+        routing); ``None`` for rootless in-memory runs so unit tests stay pure."""
+        if self.root is None:
+            return None
+        from orac.knowledge import KnowledgeBase
+
+        return KnowledgeBase(self.root)
 
     def plan_sprint(self, board: Board, capacity: int) -> list[Task]:
         planned: list[Task] = []
@@ -172,6 +186,7 @@ class Scrum:
                 context=context,
                 child_brain=self._session_brain(task),
                 prewalk=self.route_models,
+                knowledge=self._knowledge(),
             )
             if task.status == TaskStatus.DONE:
                 self._promote_if_done(board, task)
@@ -192,6 +207,7 @@ class Scrum:
             brain=self._session_brain(task),
             broker=self.broker,
             context=context,
+            knowledge=self._knowledge(),
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)
@@ -237,6 +253,7 @@ class Scrum:
             review_return=True,
             plan_brain=self._foundation_brain(),
             pattern_setter_brain=self._foundation_brain() if self.route_models else None,
+            knowledge=self._knowledge(),
         )
         if task.status == TaskStatus.DONE:
             self._promote_if_done(board, task)
