@@ -6,7 +6,18 @@
       "purpose": "Remove ambiguity from tasks and ensure the actual goal is met.",
       "prompt_file": "intent.md",
       "protocol_file": "intent_translator_max.json",
-      "tools": ["intent_silent_scan", "clarification_question", "echo_check", "intent_lock", "intent_reset", "acceptance_criteria_editor", "assumption_log"],
+      "tools": [
+        "intent_silent_scan",
+        "clarification_question",
+        "echo_check",
+        "intent_lock",
+        "intent_reset",
+        "acceptance_criteria_editor",
+        "assumption_log",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 10
     },
     {
@@ -15,7 +26,15 @@
       "purpose": "Allocate resources and aim to spend up to 60% of available resources in any situation.",
       "prompt_file": "optimiser.md",
       "protocol_file": "optimiser_resource_max.json",
-      "tools": ["resource_budgeter", "capacity_checker", "risk_register", "handoff_tracker"],
+      "tools": [
+        "resource_budgeter",
+        "capacity_checker",
+        "risk_register",
+        "handoff_tracker",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 20
     },
     {
@@ -24,7 +43,14 @@
       "purpose": "Find the most effective path with the fewest components needed to reach the goal.",
       "prompt_file": "simples.md",
       "protocol_file": "simples_minimal_path_max.json",
-      "tools": ["task_reader", "minimal_path_planner", "implementation_log"],
+      "tools": [
+        "task_reader",
+        "minimal_path_planner",
+        "implementation_log",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 30
     },
     {
@@ -33,7 +59,14 @@
       "purpose": "Find waste, dead code, and unnecessary structure; judge the design as if built from scratch with the patches already known.",
       "prompt_file": "efficiency.md",
       "protocol_file": "efficiency_waste_scan_max.json",
-      "tools": ["waste_scanner", "design_replay", "verification_log"],
+      "tools": [
+        "waste_scanner",
+        "design_replay",
+        "verification_log",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 40
     },
     {
@@ -43,7 +76,14 @@
       "purpose": "Coordinate the agent loop and report progress back to the main task.",
       "prompt_file": "orchestrator.md",
       "protocol_file": "orchestrator_reporter_max.json",
-      "tools": ["task_reader", "status_reporter", "handoff_tracker"],
+      "tools": [
+        "task_reader",
+        "status_reporter",
+        "handoff_tracker",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 50
     },
     {
@@ -53,7 +93,24 @@
       "purpose": "The only agent that writes the system's code. Builds on branches, checkpoint-first; the council plans and reviews but never writes.",
       "prompt_file": "builder.md",
       "protocol_file": "builder_build_max.json",
-      "tools": ["repo.read_file", "repo.search", "repo.write_file", "repo.edit_file", "repo.run_tests", "browser.verify_local_app", "git.create_branch", "git.commit", "git.push", "git.revert", "git.stash", "git.stash_pop", "git.status"],
+      "tools": [
+        "repo.read_file",
+        "repo.search",
+        "repo.write_file",
+        "repo.edit_file",
+        "repo.run_tests",
+        "browser.verify_local_app",
+        "git.create_branch",
+        "git.commit",
+        "git.push",
+        "git.revert",
+        "git.stash",
+        "git.stash_pop",
+        "git.status",
+        "skills_list",
+        "skill_view",
+        "skill_manage"
+      ],
       "order": 60
     }
   ]

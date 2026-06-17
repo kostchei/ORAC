@@ -4,193 +4,338 @@
       "name": "intent_silent_scan",
       "description": "Assess missing facts, constraints, and confidence before asking the user anything.",
       "regular_use": "Used by Intent at Step 0 to decide whether the task can proceed.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "clarification_question",
       "description": "Ask exactly one highest-impact clarification question.",
       "regular_use": "Used by Intent at Step 1 until confidence reaches at least 95%.",
-      "inputs": ["task_id", "missing_field"]
+      "inputs": [
+        "task_id",
+        "missing_field"
+      ]
     },
     {
       "name": "echo_check",
       "description": "Produce the one-sentence work-order confirmation before locking intent.",
       "regular_use": "Used by Intent at Step 2 after clarification confidence is high enough.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "intent_lock",
       "description": "Lock the agreed work order after YES-GO and allow downstream agents to build.",
       "regular_use": "Used only after user agreement.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "intent_reset",
       "description": "Clear the intent state and restart at silent scan.",
       "regular_use": "Used when the user says RESET or the task goal changes materially.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "task_reader",
       "description": "Read the task title, description, status, assignee, acceptance criteria, and work log.",
       "regular_use": "Used before an agent changes task state or writes a work-log entry.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "acceptance_criteria_editor",
       "description": "Create or update acceptance criteria for a task.",
       "regular_use": "Used by Intent to turn an ambiguous request into checkable work.",
-      "inputs": ["task_id", "criteria"]
+      "inputs": [
+        "task_id",
+        "criteria"
+      ]
     },
     {
       "name": "assumption_log",
       "description": "Record assumptions, open questions, and goal risks.",
       "regular_use": "Used when the task can proceed but still carries ambiguity.",
-      "inputs": ["task_id", "assumption", "impact"]
+      "inputs": [
+        "task_id",
+        "assumption",
+        "impact"
+      ]
     },
     {
       "name": "resource_budgeter",
       "description": "Estimate and record how much of the available budget the task should consume.",
       "regular_use": "Used by Optimiser to keep default effort near the 60% resource target.",
-      "inputs": ["task_id", "resource_type", "budget_limit"]
+      "inputs": [
+        "task_id",
+        "resource_type",
+        "budget_limit"
+      ]
     },
     {
       "name": "capacity_checker",
       "description": "Compare task estimates against sprint or cycle capacity.",
       "regular_use": "Used before pulling more work into active execution.",
-      "inputs": ["task_id", "available_capacity"]
+      "inputs": [
+        "task_id",
+        "available_capacity"
+      ]
     },
     {
       "name": "risk_register",
       "description": "Record risks that could cause overspend, rework, or goal drift.",
       "regular_use": "Used when resource pressure or uncertainty changes the plan.",
-      "inputs": ["task_id", "risk", "mitigation"]
+      "inputs": [
+        "task_id",
+        "risk",
+        "mitigation"
+      ]
     },
     {
       "name": "minimal_path_planner",
       "description": "Choose the fewest components and steps needed to satisfy the goal.",
       "regular_use": "Used by Simples before implementation starts.",
-      "inputs": ["task_id", "candidate_steps"]
+      "inputs": [
+        "task_id",
+        "candidate_steps"
+      ]
     },
     {
       "name": "implementation_log",
       "description": "Record implementation progress and the concrete result produced.",
       "regular_use": "Used by Simples while moving work toward review.",
-      "inputs": ["task_id", "change_summary"]
+      "inputs": [
+        "task_id",
+        "change_summary"
+      ]
     },
     {
       "name": "waste_scanner",
       "description": "Inspect work for dead code, duplicate structure, and unnecessary components.",
       "regular_use": "Used by Efficiency during review.",
-      "inputs": ["task_id", "scope"]
+      "inputs": [
+        "task_id",
+        "scope"
+      ]
     },
     {
       "name": "design_replay",
       "description": "Re-evaluate the design as if it were built from scratch with the current patches already known.",
       "regular_use": "Used by Efficiency to identify better final shapes after incremental changes.",
-      "inputs": ["task_id", "current_design"]
+      "inputs": [
+        "task_id",
+        "current_design"
+      ]
     },
     {
       "name": "verification_log",
       "description": "Record checks performed and whether the task meets the acceptance criteria.",
       "regular_use": "Used before completing or blocking a task.",
-      "inputs": ["task_id", "checks", "result"]
+      "inputs": [
+        "task_id",
+        "checks",
+        "result"
+      ]
     },
     {
       "name": "status_reporter",
       "description": "Summarize status, owner, next action, blockers, and completion signal.",
       "regular_use": "Used by Orchestrator to report back to the main task.",
-      "inputs": ["task_id"]
+      "inputs": [
+        "task_id"
+      ]
     },
     {
       "name": "handoff_tracker",
       "description": "Record the next owner and handoff reason.",
       "regular_use": "Used whenever task ownership changes between agents.",
-      "inputs": ["task_id", "next_owner", "reason"]
+      "inputs": [
+        "task_id",
+        "next_owner",
+        "reason"
+      ]
     },
     {
       "name": "fs_read",
       "description": "Read a single UTF-8 text file from the local filesystem.",
       "regular_use": "Real read-only adapter; requires human approval per path before the read runs.",
-      "inputs": ["task_id", "path"]
+      "inputs": [
+        "task_id",
+        "path"
+      ]
     },
     {
       "name": "repo.read_file",
       "description": "Read a text file inside an approved repo root.",
       "regular_use": "Builder reads source before changing it.",
-      "inputs": ["task_id", "path"]
+      "inputs": [
+        "task_id",
+        "path"
+      ]
     },
     {
       "name": "repo.search",
       "description": "Substring-search text files inside an approved repo root.",
       "regular_use": "Builder locates code to change.",
-      "inputs": ["task_id", "query", "root"]
+      "inputs": [
+        "task_id",
+        "query",
+        "root"
+      ]
     },
     {
       "name": "repo.write_file",
       "description": "Write a text file inside an approved repo root.",
       "regular_use": "Builder creates or edits code. Builder-only write capability.",
-      "inputs": ["task_id", "path", "content"]
+      "inputs": [
+        "task_id",
+        "path",
+        "content"
+      ]
     },
     {
       "name": "repo.edit_file",
       "description": "Replace one exact, unique occurrence of 'old' text with 'new' in a file (surgical edit; prefer over rewriting the whole file). Fails if 'old' is absent or not unique.",
       "regular_use": "Builder makes a small, reviewable change to existing code without rewriting the file.",
-      "inputs": ["task_id", "path", "old", "new"]
+      "inputs": [
+        "task_id",
+        "path",
+        "old",
+        "new"
+      ]
     },
     {
       "name": "repo.run_tests",
       "description": "Run pytest inside an approved repo root and report pass/fail.",
       "regular_use": "Builder verifies a change before it can reach done.",
-      "inputs": ["task_id", "root", "target"]
+      "inputs": [
+        "task_id",
+        "root",
+        "target"
+      ]
     },
     {
       "name": "browser.verify_local_app",
       "description": "Navigate a running local app via Chrome CDP and confirm it loaded with content.",
       "regular_use": "Builder verifies a UI change renders before it can reach done.",
-      "inputs": ["task_id", "app_url", "cdp_url"]
+      "inputs": [
+        "task_id",
+        "app_url",
+        "cdp_url"
+      ]
     },
     {
       "name": "git.create_branch",
       "description": "Create and check out a git branch in an approved repo root.",
       "regular_use": "Builder checkpoints before changing files (engineered reversibility).",
-      "inputs": ["task_id", "root", "name"]
+      "inputs": [
+        "task_id",
+        "root",
+        "name"
+      ]
     },
     {
       "name": "git.commit",
-      "description": "Commit exactly the named paths in an approved repo root — one logical change per commit.",
+      "description": "Commit exactly the named paths in an approved repo root \u2014 one logical change per commit.",
       "regular_use": "Builder records each change as its own reversible checkpoint; 'paths' is mandatory so individual features can be reverted independently.",
-      "inputs": ["task_id", "root", "message", "paths"]
+      "inputs": [
+        "task_id",
+        "root",
+        "message",
+        "paths"
+      ]
     },
     {
       "name": "git.status",
       "description": "Show the porcelain working-tree status of an approved repo root.",
       "regular_use": "Builder inspects pending changes.",
-      "inputs": ["task_id", "root"]
+      "inputs": [
+        "task_id",
+        "root"
+      ]
     },
     {
       "name": "git.push",
       "description": "Push a branch to a remote from an approved repo root.",
       "regular_use": "Runs unattended and lands in the review queue (review-after); rollback via git.revert.",
-      "inputs": ["task_id", "root", "remote", "branch"]
+      "inputs": [
+        "task_id",
+        "root",
+        "remote",
+        "branch"
+      ]
     },
     {
       "name": "git.revert",
       "description": "Undo a committed change by creating an inverse commit (no history rewrite).",
       "regular_use": "The rollback primitive behind review-after: a reviewed 'not ok' has a one-step undo.",
-      "inputs": ["task_id", "root", "sha"]
+      "inputs": [
+        "task_id",
+        "root",
+        "sha"
+      ]
     },
     {
       "name": "git.stash",
       "description": "Set aside uncommitted changes (including untracked files) with a label.",
       "regular_use": "Builder clears unrelated working-tree noise so a commit captures only its logical change.",
-      "inputs": ["task_id", "root", "label"]
+      "inputs": [
+        "task_id",
+        "root",
+        "label"
+      ]
     },
     {
       "name": "git.stash_pop",
       "description": "Restore the most recently stashed working tree.",
       "regular_use": "Builder resumes set-aside work after a clean, path-scoped commit.",
-      "inputs": ["task_id", "root"]
+      "inputs": [
+        "task_id",
+        "root"
+      ]
+    },
+    {
+      "name": "skills_list",
+      "description": "List available skills (name + description). Use skill_view(name) to load full content.",
+      "regular_use": "Used to find reusable approaches for recurring task types.",
+      "inputs": [
+        "task_id",
+        "category"
+      ]
+    },
+    {
+      "name": "skill_view",
+      "description": "Load a skill's full content or access its linked files (references, templates, scripts). First call returns SKILL.md content plus a 'linked_files' dict showing available references/templates/scripts.",
+      "regular_use": "Used to read detailed instructions for a specific skill.",
+      "inputs": [
+        "task_id",
+        "name",
+        "file_path"
+      ]
+    },
+    {
+      "name": "skill_manage",
+      "description": "Manage skills (create, update, delete). Actions: create, patch, edit, delete, write_file, remove_file. Create when: complex task succeeded, errors overcome, non-trivial workflow discovered.",
+      "regular_use": "Used to memorize reusable workflows as skills after a complex task.",
+      "inputs": [
+        "task_id",
+        "action",
+        "name",
+        "content",
+        "category",
+        "file_path",
+        "file_content",
+        "old_string",
+        "new_string",
+        "replace_all",
+        "absorbed_into"
+      ]
     }
   ]
 }
