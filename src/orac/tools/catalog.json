@@ -191,6 +191,48 @@
       "description": "Restore the most recently stashed working tree.",
       "regular_use": "Builder resumes set-aside work after a clean, path-scoped commit.",
       "inputs": ["task_id", "root"]
+    },
+    {
+      "name": "skill.list",
+      "description": "List skills in the .orac/skills library, optionally filtered by category.",
+      "regular_use": "Any agent discovers reusable procedures before planning or building.",
+      "inputs": ["task_id", "category"]
+    },
+    {
+      "name": "skill.view",
+      "description": "Read a skill's SKILL.md (and its linked files), or one named file inside it.",
+      "regular_use": "Any agent loads a skill's procedure to apply it to the current task.",
+      "inputs": ["task_id", "name", "file_path"]
+    },
+    {
+      "name": "skill.create",
+      "description": "Create a new skill folder with a SKILL.md inside .orac/skills (fails if it exists).",
+      "regular_use": "Builder captures a reusable procedure learned while doing the work.",
+      "inputs": ["task_id", "name", "content", "category"]
+    },
+    {
+      "name": "skill.edit",
+      "description": "Rewrite a skill's SKILL.md; the prior version is snapshotted to .history first.",
+      "regular_use": "Builder updates a skill wholesale; reversible via the .history snapshot.",
+      "inputs": ["task_id", "name", "content"]
+    },
+    {
+      "name": "skill.patch",
+      "description": "Replace one exact, unique occurrence of 'old' with 'new' in a skill file (snapshot-first). Fails if 'old' is absent or not unique unless replace_all.",
+      "regular_use": "Builder makes a small, reviewable change to a skill without rewriting it.",
+      "inputs": ["task_id", "name", "old", "new", "file_path", "replace_all"]
+    },
+    {
+      "name": "skill.write_file",
+      "description": "Write a supporting file alongside a skill's SKILL.md (snapshot-first; cannot write SKILL.md).",
+      "regular_use": "Builder adds a reference, script, or example file to a skill.",
+      "inputs": ["task_id", "name", "file_path", "file_content"]
+    },
+    {
+      "name": "skill.archive",
+      "description": "Retire a skill by moving it under .archive (recoverable). There is no hard-delete.",
+      "regular_use": "Builder sets aside a superseded or consolidated skill without destroying it.",
+      "inputs": ["task_id", "name", "absorbed_into"]
     }
   ]
 }

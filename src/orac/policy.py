@@ -69,6 +69,17 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     # Stash push/pop set aside and restore uncommitted work: local, reversible.
     "git.stash": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "git.stash_pop": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    # Skill-library tools (the closed learning loop). All local and reversible:
+    # reads are side-effect free; writes snapshot the prior version under
+    # ``.history`` first, and "removal" is an archive (move) not a delete, so a
+    # wrong call costs a restore, not the work. Auto + audit, never parked.
+    "skill.list": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.view": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.create": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.edit": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.patch": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.write_file": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "skill.archive": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
 }
 
 
@@ -157,6 +168,12 @@ SAFETY_CRITICAL_PATHS: frozenset[str] = frozenset(
 # Tool -> the arg key holding the path(s) it would write/commit. A safety-critical
 # match on any of these escalates. Reads/searches/status are not listed: only a
 # mutation of the governor is gated, not looking at it.
+# Skill-library writes (skill.create/edit/patch/write_file/archive) are
+# deliberately absent: their adapter confines every path inside ``.orac/skills``,
+# so they can never resolve to a SAFETY_CRITICAL_PATH. Their path args also name
+# skill-relative files, not repo paths, so this safety-critical gate has nothing
+# to match. Containment is the right control for them, not governor-edit
+# escalation.
 _PATH_BEARING_TOOLS: dict[str, str] = {
     "repo.write_file": "path",   # whole-file mutation
     "repo.edit_file": "path",    # surgical mutation

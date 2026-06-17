@@ -21,6 +21,7 @@ from orac.models import (
     Task,
 )
 from orac.policy import ApprovalMode, approval_mode_for, contract_denial, risk_class
+from orac.skills_adapters import skills_adapters_for
 from orac.tooling import RegularToolExecutor
 
 
@@ -111,6 +112,10 @@ class ToolBroker:
         adapters.update(browser_adapters())
         if repo_root is not None:
             adapters.update(code_adapters_for((repo_root,)))
+            # The skill library lives under ``.orac/skills`` in the repo root;
+            # its mutations are contained to that tree and governed by name like
+            # any other adapter (risk_class + council + grant).
+            adapters.update(skills_adapters_for(repo_root))
         return adapters
 
     @staticmethod
