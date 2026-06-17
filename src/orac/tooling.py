@@ -6,6 +6,8 @@ from typing import Any
 from orac.intent_backbone import IntentBackbone, IntentField
 from orac.models import Task
 
+from orac.skills_tooling import skills_list, skill_view, skill_manage
+
 
 @dataclass
 class ToolResult:
@@ -35,6 +37,9 @@ class RegularToolExecutor:
             "verification_log": self.verification_log,
             "status_reporter": self.status_reporter,
             "handoff_tracker": self.handoff_tracker,
+            "skills_list": self.skills_list,
+            "skill_view": self.skill_view,
+            "skill_manage": self.skill_manage,
         }
         try:
             handler = handlers[name]
@@ -172,3 +177,17 @@ class RegularToolExecutor:
         message = f"Handoff to {next_owner}: {reason}"
         task.add_log(agent, message)
         return ToolResult("handoff_tracker", message, {"next_owner": next_owner, "reason": reason})
+
+    def skills_list(self, task: Task, agent: str, category: str = "") -> ToolResult:
+        res = skills_list(task, agent, category)
+        return ToolResult(res[0], res[1], res[2])
+
+    def skill_view(self, task: Task, agent: str, name: str, file_path: str = "") -> ToolResult:
+        res = skill_view(task, agent, name, file_path)
+        return ToolResult(res[0], res[1], res[2])
+
+    def skill_manage(
+        self, task: Task, agent: str, action: str, name: str, **kwargs: Any
+    ) -> ToolResult:
+        res = skill_manage(task, agent, action, name, **kwargs)
+        return ToolResult(res[0], res[1], res[2])
