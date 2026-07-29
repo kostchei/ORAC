@@ -27,7 +27,7 @@ comes first and groups 2–5 defer behind it. This doc is the master ordering; t
 
 ---
 
-## Milestone A — Governance spine + Code-Writing bootstrap (NEXT)
+## Milestone A — Governance spine + Code-Writing bootstrap (COMPLETE)
 
 Ordered; each step keeps the suite green.
 
@@ -49,10 +49,11 @@ Ordered; each step keeps the suite green.
       advanced; the daemon originates when idle.
 - [x] **General work model.** `work.py::WORK_KINDS` — tasks carry a `work_kind` spanning all five
       categories (code / comms / media / physical / event), each with its sole doer (the §4.6
-      one-writer invariant generalised: Messenger will hold `channel.send`, Operator
-      `execute_action`, …), its contract rules, and its kind-specific "done means".
-      `run_goal_task` is the one runner for every kind; only `code` has a doer today — a goal in
-      a doer-less kind blocks visibly, naming the missing capability group.
+      one-writer invariant generalised: Builder holds code writes, Messenger holds
+      `channel.send`, and future Operator work will hold `execute_action`), its contract rules,
+      and its kind-specific "done means". `run_goal_task` is the one runner for every kind;
+      `code` and `comms` have doers today, while a media, physical, or event goal blocks visibly,
+      naming the missing capability group.
 - [x] **P5 — LLM lenses (live-fire).** The three judgement lenses (Optimise/Simple/Efficiency)
       reason over consequential edges on the resident local model (`lenses.py`), gated to
       state-changing tools (`LLM_REVIEWED_TOOLS`); verdicts aggregate with the deterministic floor
@@ -126,20 +127,23 @@ category starts until item 4 has produced real evidence.
    waiting to be polled; the UI exposes it in `/api/state` (`review_queue`) and a read-only
    `/api/reviews` endpoint mirroring the CLI cockpit. **Optional follow-up:** a true push channel
    (Windows toast) consuming the same summary, and UI buttons to ack/approve from the browser.
-4. **Soak run, then choose the next surface.** The exit criterion's stated unknown is live-model
-   quality, not machinery. A few daemon-days with 1–3 in place generates the labelled escalation
-   data the lens-eval suite wants, and decides what earns the next slot: Group 2 (Communications,
-   blocked on the credential vault) or more Group 1 depth (e.g. `browser.verify_local_app`).
+4. **Reconcile state, then run a supervised live-model canary.** The exit criterion's stated
+   unknown is live-model quality, not the governance machinery. Before an endurance run, reconcile
+   the persisted board with the work that landed through manual recovery: old blocked tasks and
+   leaked active subagent reservations must not distort the self-tuning signal. Then start LM
+   Studio, run `orac models verify` and `orac lenses eval`, and use
+   `python scripts/soak_validate.py 3` for a small observed run. Promote to an overnight daemon
+   only after the canary completes verified work without malformed model replies, step-budget
+   exhaustion, leaked roster reservations, or unexpected review-queue entries.
 
 ---
 
 ## Decomposition fan-out — many subagents under one goal
 
 The Orchestrator can break a goal into a fan-out of subagents, each owning a slice of the
-intent, with resource governance and an intent-coverage guarantee. Built and tested as a
-library; **not yet wired into the daemon loop** (the loop still runs one doer per goal via
-`scrum._build_if_goal_task` → `run_goal_task`; switching it to `run_orchestrated_goal` is the
-remaining integration step).
+intent, with resource governance and an intent-coverage guarantee. It is wired into the daemon
+loop: `scrum._build_if_goal_task` keeps small goals single-doer and routes larger or explicitly
+flagged goals through `run_orchestrated_goal`.
 
 - **(a) Subagent register (the ≤500 roster).** `broker_store.subagents` + `MAX_SUBAGENTS=500`.
   `admit_subagent` is fail-closed admission control; `subagent_free_slots` / `active_slice_total`
@@ -162,10 +166,11 @@ remaining integration step).
   the 60%-utilisation idea made concrete). A refused spawn defers the slice. `run_orchestrated_goal`
   ties (c)→(d)→(e)→(b) into one entry.
 
-**Next for this subsystem:** wire `run_orchestrated_goal` into the loop behind a goal-size
-heuristic (small goals stay single-doer); promote the RETURN edge to a full council review
-(today the per-slice return is the deterministic `verify_goal_done` floor); let subagents
-recurse (the register cap is already global, so depth is naturally bounded).
+The fan-out path also promotes the RETURN edge to a full council review after deterministic
+verification, supports bounded recursive decomposition, injects verified shared lessons between
+sibling slices, and uses a bounded self-tuning threshold to decide how readily goals fan out.
+The remaining work is operational: collect canary evidence, surface stale or conflicted roster
+state clearly, and tune only from observed outcomes.
 
 ---
 
@@ -179,14 +184,17 @@ recurse (the register cap is already global, so depth is naturally bounded).
       without ever waiving the safety floor. Notify transport surfaces the queue each daemon tick
       and in the UI state. *(See Build-order item 3. Optional follow-up: a push toast + UI
       ack/approve buttons.)*
-- [ ] **Credential vault** (DPAPI / Windows Credential Manager, opaque `credential_ref`,
-      redaction at the logging layer). **Hard blocker for Group 2.**
+- [x] **Credential vault.** Windows DPAPI seals secrets under opaque `credential_ref` values in
+      `.orac/credentials.json`; configuration and logs retain references only, and the logging
+      boundary redacts stored secret values.
 
 Then the remaining four categories, in **risk order** (lowest first), each gated by the now-mature
 risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 
-- [ ] **Group 2 — Communications.** `channel.read` then `channel.send`; default **draft → approve
-      → send**. Start with Slack *read*. (Blocked on credential vault.)
+- [x] **Group 2 — Communications.** The Messenger is the sole holder of
+      `channel.read` / `channel.draft` / `channel.send`, backed by Slack and WhatsApp adapters.
+      Reads and drafts are brokered local actions; sends are external and approval-gated. A
+      credential is required at dispatch time and missing credentials fail closed.
 - [ ] **Group 3 — Media.** Job queue, not blocking calls; ComfyUI; `review → publish`.
 - [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; e-stop; cooldowns;
       Home Assistant / MQTT first. Approval by default.
@@ -205,7 +213,7 @@ the council contract.
 | --- | --- | --- |
 | Code-execution substrate (Roo Code / Codex / local shell) | Group 1 write slice | **Settled:** local subprocess git/pytest. Write = `repo.write_file` (whole file) + `repo.edit_file` (surgical, fail-closed); `repo.apply_patch` satisfied in spirit |
 | ESCALATE vs BLOCK semantics (design §8.3) | P3 | **Settled:** ESCALATE→pending, BLOCK→denied |
-| Safety-critical-file gate (design §8.7) | unattended daemon run | **Promoted to Build-order item 1** (next): edits to broker/policy/council/loop **and the grant seed** escalate to human even for the Builder |
-| Credential vault | Group 2 | No real `channel.send` without it |
+| Safety-critical-file gate (design §8.7) | unattended daemon run | **Settled:** edits to broker/policy/council/loop **and the grant seed** escalate to human even for the Builder |
+| Credential vault | Group 2 | **Settled:** DPAPI-backed references and log redaction are in place; real sends still require a configured credential and human approval |
 | 60% band tolerance + reaction speed (design §8.6) | Optimise driver | Control-loop tuning, not a blocker for Milestone A |
 | Group 5 as separate epic | Group 5 | Workflow engine consuming the broker, not part of it |

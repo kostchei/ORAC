@@ -79,7 +79,7 @@ pip install -e .[audio]
 
 Whisper requires `ffmpeg` on `PATH` for common browser audio formats such as WebM.
 
-Runtime parameters are editable in the UI under `Settings`, including monthly budget, estimated foundation cycle cost, agent wake interval, cycles per tick, LM Studio URL, and standard/small local model IDs. The daily budget, 60% foundational fraction, and 60% local resource target are fixed in code by design.
+Runtime parameters are editable in the UI under `Settings`, including monthly budget, agent wake interval, cycles per tick, LM Studio URL, and standard/small local model IDs. The daily budget, 60% foundational fraction, and 60% local resource target are fixed in code by design.
 
 ## 24/7 Loop and Model Routing
 
@@ -95,9 +95,21 @@ The model policy defaults to:
 - $20/month online foundational budget.
 - $0.75/day planning budget.
 - 60% of the daily budget available to foundational access, so the default daily foundational cap is $0.45.
-- $0.05 estimated foundational spend recorded per productive agent cycle unless you change the policy config.
+- Foundation spend is measured from API token usage for priced foundation models; local and browser-backed work does not accrue foundation spend.
 
 When the daily foundational cap is exhausted, ORAC routes back to local models. When local CPU, memory, GPU, or VRAM use is high, ORAC chooses the smaller local model tier.
+
+Before leaving the daemon unattended, verify the live model path and run a short
+observed canary:
+
+```powershell
+python -m orac.cli models verify
+python -m orac.cli lenses eval
+python scripts\soak_validate.py 3
+```
+
+The canary should complete verified work without malformed model replies,
+step-budget exhaustion, stale subagent reservations, or unexpected review items.
 
 ## Review queue (review-after, not ask-before)
 

@@ -1,8 +1,23 @@
 # ORAC TODO
 
-High-signal follow-up items from the current appraisal. These are not feature
-ideas; they are verification, safety, and durability gaps that should be closed
-before ORAC widens beyond the code-writing bootstrap.
+High-signal follow-up items from the current appraisal. These are operational
+verification, safety, and durability gaps to close before ORAC widens beyond
+the code-writing and communications surfaces already present.
+
+## Immediate Operational Readiness
+
+- [ ] **Reconcile persisted board state with implemented work.** The current
+  board contains old blocked tasks from before later manual recovery commits,
+  plus stale active subagent reservations. Preserve the event-log history, but
+  make the current board and its telemetry distinguish superseded work, genuine
+  blockers, and stale reservations so the self-tuning loop does not learn from
+  obsolete failures.
+
+- [ ] **Run a supervised live-model canary before an overnight daemon.** Start
+  LM Studio, verify the configured model slots, run `orac lenses eval`, then
+  run `python scripts/soak_validate.py 3`. Record whether each tick completes
+  verified work without malformed structured replies, step-budget exhaustion,
+  leaked roster reservations, or unexpected review-queue entries.
 
 ## Safety and Verification
 
@@ -59,10 +74,12 @@ before ORAC widens beyond the code-writing bootstrap.
   instead of silently destroying the other writer's updates (the daemon tick
   vs. UI server window). Covered by `tests/test_storage.py`.
 
-- [ ] **Resolve write conflicts, don't just detect them.** `StaleBoardError`
-  turns the daemon-tick vs. UI-server lost-update race from silent data loss
-  into a loud failure, but the losing writer still has no way to merge its
-  changes. Proper resolution is the event log's job (below).
+- [x] **Resolve write conflicts, not just detect them.** Pure writers retry by
+  reapplying their mutation through `BoardStore.update`; long-running daemon
+  work uses `BoardStore.save_merging` and a task-level three-way merge against
+  the event-log snapshot. The remaining follow-up is to surface a same-task
+  merge conflict to the operator rather than silently retaining the newest task
+  version.
 
 - [x] **Board event log.** `BoardStore` now keeps an append-only
   `board.events.jsonl`: every committed board state is appended (full snapshot +
@@ -73,7 +90,6 @@ before ORAC widens beyond the code-writing bootstrap.
   single last-good backup (full history, any revision), proven by a test that
   rebuilds after BOTH board.json and the backup are deleted. CLI: `orac board events`
   (history) and `orac board rebuild`. The snapshot-per-commit form makes replay
-  trivially correct (no rebuild-inequality risk). **Remaining for the conflict-
-  resolution item above:** finer-grained per-field deltas + a merge of a losing
-  writer's changes, and unifying this timeline with the broker audit trail; log
-  compaction/rotation for long runs.
+  trivially correct (no rebuild-inequality risk). The remaining durability
+  follow-ups are log compaction/rotation for long runs and a clearer operator
+  surface for the rare same-task merge conflict.
