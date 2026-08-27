@@ -17,7 +17,8 @@ from orac.models import (
     Task,
     TaskStatus,
 )
-from orac.notify import review_queue_summary
+from orac.notify import operator_advisory_summary
+from orac.promoter import list_promotions
 from orac.storage import BoardStore
 from orac.task_registry import TaskRegistry
 
@@ -125,10 +126,12 @@ class ChatGateway:
         bstore = BrokerStore(self.store.root).init()
         pending = bstore.list_pending()
         notes = bstore.list_notifications(unacked_only=True)
+        promotions = list_promotions(self.store.root, limit=4)
         digest = json.dumps(
             {
                 "pending": [p.id for p in pending],
                 "notifications": [n.id for n in notes],
+                "promotions": [item.task_id for item in promotions],
             },
             sort_keys=True,
         )
@@ -136,10 +139,13 @@ class ChatGateway:
             return []
         had_previous = self._last_push_digest is not None
         self._last_push_digest = digest
-        if not pending and not notes and not had_previous:
+        if not pending and not notes and not promotions and not had_previous:
             return []
 
         text = self._reviews_text(pending_limit=4, notification_limit=4)
+        if promotions:
+            completion_text = "\n\n".join(item.message() for item in promotions)
+            text = f"{text}\n\nCompletion digest:\n{completion_text}"
         out: list[OutboundMessage] = []
         for channel in CHANNELS:
             spec = cfg["channels"][channel]
@@ -236,7 +242,7 @@ class ChatGateway:
     def _status_text(self) -> str:
         board = self._load_or_init_board()
         stats = TaskRegistry(board).stats()
-        summary = review_queue_summary(BrokerStore(self.store.root).init())
+        summary = operator_advisory_summary(BrokerStore(self.store.root).init(), self.store.root)
         return (
             f"ORAC status: {stats.active} active, {stats.blocked} blocked, "
             f"{stats.done} done, {stats.backlog} backlog. {summary.message()}"

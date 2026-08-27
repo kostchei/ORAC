@@ -70,6 +70,8 @@ def test_count_threshold_triggers_advisory(tmp_path: Path) -> None:
     assert "[reservoir advisory]" in adv
     assert "16 queue action(s) cleared" in adv
     assert "threshold: 15 actions" in adv
+    assert "review quality" not in adv
+    assert "Declared precaution" in adv
 
 
 def test_span_threshold_triggers_advisory(tmp_path: Path) -> None:

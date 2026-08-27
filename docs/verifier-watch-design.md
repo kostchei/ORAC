@@ -66,6 +66,11 @@ Every verifier-watch component must strictly satisfy three invariant rules:
 - Produces token ranges, latency ranges, and — when `usage.json` contains measured foundation spend — a dollar cost range.
 - Strictly refuses to guess dollar amounts when only free/local models or unmeasured tokens are used.
 
+### 4.4 Unified Operator Advisory (`src/orac/notify.py`)
+- `operator_advisory_summary` combines the review queue, Reservoir observation, WIP collision notes, and the latest Promoter completion digest.
+- Consumed by `orac status`, daemon output, and chat status without changing any command outcome.
+- The Promoter digest is completion state, not a human score; it is read from the local `.orac/promotions/` spool.
+
 ---
 
 ## 5. Verification Matrix
@@ -75,3 +80,4 @@ Every verifier-watch component must strictly satisfy three invariant rules:
 | **Reservoir** | W1 (Read-Only), W2 (Non-blocking), W3 (Threshold honesty) | `tests/test_reservoir_advisory.py` |
 | **WIP Registry** | W1 (Isolated state), W2 (Advisory-only), Worktree collision detection | `tests/test_session_registry.py` |
 | **Cost Estimate** | W3 (Ranges only, no ungrounded cost guessing) | `tests/test_cost_estimate.py` |
+| **Unified Advisory** | W1 (read-only governance), W2 (status only), Promoter integration | `tests/test_notify.py`, `tests/test_promoter.py` |

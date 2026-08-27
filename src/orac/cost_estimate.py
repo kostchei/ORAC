@@ -80,11 +80,8 @@ def _get_measured_usd_per_1ktok(store: BoardStore) -> float | None:
     if total_spent > 0 and "measured_tokens" in usage and usage["measured_tokens"] > 0:
         return total_spent / (usage["measured_tokens"] / 1000)
 
-    # Check if a positive daily spend exists with known default pricing
-    if total_spent > 0:
-        # Standard measured baseline: ~$0.003 / 1k tokens for blended foundation
-        return 0.003
-
+    # Spend without its measured token denominator is not a rate. Refuse to
+    # convert it into dollars-per-token rather than smuggling in a price guess.
     return None
 
 

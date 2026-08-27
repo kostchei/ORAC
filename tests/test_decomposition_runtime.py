@@ -9,7 +9,7 @@ from orac.intent_ledger import open_ledger
 from orac.models import Board, CapabilityRequest, CapabilityStatus, Task, TaskStatus
 from orac.policy import contract_denial
 from orac.scrum import Scrum
-from orac.work import run_goal_task
+from orac.work import run_decomposed_goal, run_goal_task
 
 
 # === 1. contract_denial — the pure scope check (broker enforcement core) ======
@@ -69,6 +69,17 @@ def test_git_commit_checks_every_path_in_the_list() -> None:
     assert contract_denial("git.commit", {"paths": ["tests/a.py"]}, contract) is None
     reason = contract_denial("git.commit", {"paths": ["tests/a.py", "src/x.py"]}, contract)
     assert reason is not None and "src/x.py" in reason
+
+
+def test_prewalk_contract_requires_pattern_commit_as_branch_base() -> None:
+    contract = {"required_branch_base": "abc123"}
+    assert contract_denial(
+        "git.create_branch", {"name": "worker", "base": "abc123"}, contract
+    ) is None
+    reason = contract_denial(
+        "git.create_branch", {"name": "worker", "base": "main"}, contract
+    )
+    assert reason is not None and "pattern commit" in reason
 
 
 # === 2. the broker enforces the contract at the edge (deny path, no execute) ==
@@ -347,3 +358,72 @@ def test_scrum_resumes_existing_open_decomposition_ledger(tmp_path, monkeypatch)
 
     assert calls["resume"] == 1
     assert result.touched_tasks == 1
+
+
+def test_prewalk_runs_pattern_setter_first_and_inherits_commit(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".orac").mkdir()
+    (tmp_path / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "base.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "base"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    broker = ToolBroker.from_store(BrokerStore(tmp_path).init(), repo_root=tmp_path)
+    board = Board()
+    parent = Task(title="parent", status=TaskStatus.IN_PROGRESS)
+    board.add_task(parent)
+    frontier = object()
+    local = object()
+    calls = []
+
+    def fake_goal(*, board, parent, goal, brain, context, contract_metadata=None, **kwargs):
+        calls.append((goal, brain, dict(context), dict(contract_metadata or {})))
+        child = Task(title=goal, parent_id=parent.id, status=TaskStatus.DONE)
+        child.add_log("Builder", f"done: {goal}")
+        board.add_task(child)
+        return child
+
+    import orac.work as work_mod
+
+    monkeypatch.setattr(work_mod, "run_goal_task", fake_goal)
+    plan = [
+        {
+            "sub_intent": "set the pattern",
+            "goal": "establish interfaces and fixtures",
+            "acceptance_criteria": ["pattern exists"],
+            "pattern_setter": True,
+        },
+        {
+            "sub_intent": "extend the pattern",
+            "goal": "implement the second slice",
+            "acceptance_criteria": ["slice exists"],
+        },
+    ]
+
+    children = run_decomposed_goal(
+        board,
+        parent,
+        "ship both slices",
+        plan,
+        "code",
+        local,
+        broker,
+        {"repo_root": str(tmp_path)},
+        pattern_setter_brain=frontier,
+    )
+
+    assert len(children) == 2 and parent.status is TaskStatus.DONE
+    assert calls[0][1] is frontier and calls[0][3]["pattern_setter"] is True
+    assert calls[1][1] is local
+    assert calls[1][3]["required_branch_base"] == calls[1][2]["pattern_commit_sha"]
+    assert calls[1][2]["pattern_commit_sha"] == subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert "establish interfaces" in calls[1][2]["pattern_summary"]

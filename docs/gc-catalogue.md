@@ -1,8 +1,10 @@
 # Garbage Collection & Entropy Catalogue
 
-A structured checklist of system entropy categories for ORAC's idle self-improvement driver (`src/orac/driver.py`) and maintenance routines.
+A structured checklist of system entropy categories for ORAC's idle self-improvement driver (`src/orac/driver.py`) and executable scanner/collector (`src/orac/entropy.py`).
 
-When ORAC is idle with an empty review queue and free compute, the driver's origination loop selects bounded, deterministic maintenance tasks to counteract entropy across code, board state, documentation, and operational storage.
+When ORAC is idle with free compute, the driver first performs bounded runtime garbage collection: expired subagent leases are retired and stale session files are pruned according to their existing TTLs. It then adds evidence-backed `entropy_findings` to origination telemetry. Broader remediation remains a normal goal and must pass through the Builder, council, verification, and Promoter lifecycle.
+
+The scanner currently detects stale subagent reservations, orphaned child tasks, oversized connector logs, accumulated unacknowledged reviews, and SQLite freelist pressure. Catalogue entries without a detector remain explicit extension points, not implemented claims.
 
 ---
 

@@ -59,6 +59,21 @@ def test_estimate_populates_dollar_cost_when_rate_measured(tmp_path: Path) -> No
     assert "grounded on measured spend" in cli_out
 
 
+def test_estimate_refuses_spend_without_measured_token_denominator(tmp_path: Path) -> None:
+    store = BoardStore(tmp_path)
+    store.init()
+    usage_path = tmp_path / ".orac" / "usage.json"
+    usage_path.write_text(
+        json.dumps({"foundation": {"2026-08-27": 0.25}}),
+        encoding="utf-8",
+    )
+
+    est = estimate_goal("Implement a feature", root=tmp_path)
+
+    assert est.cost_usd_range is None
+    assert est.grounded is False
+
+
 def test_estimate_scales_with_goal_length(tmp_path: Path) -> None:
     store = BoardStore(tmp_path)
     store.init()

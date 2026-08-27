@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from orac.broker_store import BrokerStore
-from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus
-from orac.notify import review_queue_summary
+from orac.models import (
+    Board,
+    CapabilityRequest,
+    CapabilityResult,
+    CapabilityStatus,
+    Task,
+    TaskStatus,
+)
+from orac.notify import operator_advisory_summary, review_queue_summary
+from orac.promoter import promote_goal
+from orac.session_registry import record_session_start
 from orac.ui_server import _reviews_payload, _state_payload
 from orac.storage import BoardStore
 
@@ -67,6 +76,7 @@ def test_state_payload_includes_review_queue(tmp_path) -> None:
 
     assert payload["review_queue"]["unacked_notifications"] == 1
     assert payload["review_queue"]["total"] == 1
+    assert payload["operator_advisory"]["review_queue"]["total"] == 1
 
 
 def test_reviews_payload_mirrors_the_cli_queue(tmp_path) -> None:
@@ -85,3 +95,24 @@ def test_reviews_payload_mirrors_the_cli_queue(tmp_path) -> None:
     assert len(payload["standing_grants"]) == 1
     # the notification carries its persisted result data for the UI to act on
     assert "data" in payload["notifications"][0]
+
+
+def test_operator_advisory_combines_wip_and_latest_completion(tmp_path) -> None:
+    store = _store(tmp_path)
+    record_session_start(tmp_path, session_type="cli", pid=1001, cwd=tmp_path)
+    record_session_start(tmp_path, session_type="daemon", pid=1002, cwd=tmp_path)
+    task = Task(title="Ship the phase", status=TaskStatus.DONE)
+    promote_goal(tmp_path, Board(tasks=[task]), task)
+
+    summary = operator_advisory_summary(
+        store,
+        tmp_path,
+        current_cwd=tmp_path,
+        check_alive=False,
+    )
+
+    assert len(summary.wip) == 1
+    assert "2 active sessions" in summary.wip[0]
+    assert summary.latest_completion is not None
+    assert "Completed: Ship the phase" in summary.latest_completion
+    assert "[promoter]" in summary.message()

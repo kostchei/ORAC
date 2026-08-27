@@ -171,7 +171,10 @@ class Scrum:
                 broker=self.broker,
                 context=context,
                 child_brain=self._session_brain(task),
+                prewalk=self.route_models,
             )
+            if task.status == TaskStatus.DONE:
+                self._promote_if_done(board, task)
             # run_orchestrated_goal settles the parent against the intent ledger
             # (DONE when covered, BLOCKED when a slice is); only escalation is ours.
             if task.status == TaskStatus.BLOCKED:
@@ -192,6 +195,7 @@ class Scrum:
         )
         if child.status == TaskStatus.DONE and task.status != TaskStatus.BLOCKED:
             task.transition(TaskStatus.DONE)
+            self._promote_if_done(board, task)
         elif child.status == TaskStatus.BLOCKED:
             self._maybe_escalate(task)
         return True
@@ -232,10 +236,28 @@ class Scrum:
             max_repairs=2,
             review_return=True,
             plan_brain=self._foundation_brain(),
+            pattern_setter_brain=self._foundation_brain() if self.route_models else None,
         )
+        if task.status == TaskStatus.DONE:
+            self._promote_if_done(board, task)
         if task.status == TaskStatus.BLOCKED:
             self._maybe_escalate(task)
         return bool(children) or len(task.work_log) != before_logs
+
+    def _promote_if_done(self, board: Board, task: Task) -> None:
+        """Run the final role boundary; a promotion failure is visible, not skipped."""
+        if self.root is None or task.status is not TaskStatus.DONE:
+            return
+        from orac.promoter import promote_goal
+
+        try:
+            promote_goal(self.root, board, task)
+        except Exception as exc:  # noqa: BLE001 - Promoter failure must surface on-board
+            task.transition(TaskStatus.BLOCKED)
+            task.add_log(
+                "Promoter",
+                f"Promotion failed after verification: {type(exc).__name__}: {exc}",
+            )
 
     def _session_brain(self, task: Task) -> Brain:
         if not self.route_models:

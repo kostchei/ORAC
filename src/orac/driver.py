@@ -76,6 +76,8 @@ class Origination:
 
 def gather_telemetry(board: Board, store: BrokerStore, repo_root: str | Path) -> dict[str, Any]:
     """What the system knows about itself — the raw material of initiative."""
+    from orac.entropy import scan_entropy
+
     by_status: dict[str, int] = {}
     for task in board.tasks:
         by_status[task.status.value] = by_status.get(task.status.value, 0) + 1
@@ -98,6 +100,9 @@ def gather_telemetry(board: Board, store: BrokerStore, repo_root: str | Path) ->
         "open_pending_approvals": len(store.list_pending()),
         "recent_council_flags": escalations,
         "roadmap_open_items": open_items,
+        "entropy_findings": [
+            finding.to_dict() for finding in scan_entropy(board, store, repo_root)
+        ],
     }
 
 
@@ -124,9 +129,18 @@ def originate(
     if store.rate_count("Optimiser", ORIGINATE_COUNTER, today_utc()) >= daily_cap:
         return None
 
+    # Phase 5's executable GC pass: retire only expired runtime leases/session
+    # files before asking the model to choose a reviewed improvement goal. Broader
+    # entropy is detected below and becomes normal governed work, never an
+    # unreviewed cleanup sweep.
+    from orac.entropy import collect_idle_garbage
+
+    gc_result = collect_idle_garbage(store, repo_root)
+
     from orac.work import WORK_KINDS
 
     telemetry = gather_telemetry(board, store, repo_root)
+    telemetry["idle_gc"] = gc_result.to_dict()
     kinds = ", ".join(
         spec.kind if spec.doer_slug else f"{spec.kind} (no-doer)"
         for spec in WORK_KINDS.values()

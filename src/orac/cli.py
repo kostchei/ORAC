@@ -40,7 +40,7 @@ from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
 from orac.task_registry import TaskRegistry
-from orac.notify import reservoir_advisory, review_queue_summary
+from orac.notify import operator_advisory_summary, reservoir_advisory, review_queue_summary
 from orac.ui_server import run_ui
 from orac.daemon import run_daemon
 
@@ -1102,22 +1102,20 @@ def cmd_status(store: BoardStore) -> int:
     print(f"  Board revision: {board.revision} ({len(board.tasks)} tasks: {status_str})")
     print(f"  Model brain:    {decision.brain} ({decision.model}) — {decision.reason}")
 
-    # Sessions & WIP
-    from orac.session_registry import live_sessions, wip_advisory
+    # Sessions & unified verifier-watch / Promoter advisory
+    from orac.session_registry import live_sessions
     sessions = live_sessions(store.root)
     print(f"  Active sessions: {len(sessions)}")
     for s in sessions:
         print(f"    - PID {s.get('pid')} [{s.get('type')}] cwd: {s.get('cwd')}")
-    wip_notes = wip_advisory(store.root)
-    for note in wip_notes:
+    advisory = operator_advisory_summary(bstore, store.root)
+    print(f"  Review queue:   {advisory.review_queue.message()}")
+    for note in advisory.wip:
         print(f"    {note}")
-
-    # Review Queue & Reservoir
-    summary = review_queue_summary(bstore)
-    print(f"  Review queue:   {summary.message()}")
-    res_adv = reservoir_advisory(bstore)
-    if res_adv:
-        print(f"  {res_adv}")
+    if advisory.reservoir:
+        print(f"  {advisory.reservoir}")
+    if advisory.latest_completion:
+        print(f"  [promoter] {advisory.latest_completion}")
 
     return 0
 

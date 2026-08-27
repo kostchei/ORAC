@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from orac.agent_registry import load_agent_profiles
@@ -215,13 +217,25 @@ def run_goal_task(
     # dedicated contract block rather than a stray context line, and excluded from
     # the generic CONTEXT render so they read as guidance, not data.
     lessons_block = str(context.get("shared_lessons", "")).strip()
+    rules = spec.contract_rules.format(task_id=child.id)
+    required_base = str(contract_data.get("required_branch_base", "")).strip()
+    if required_base:
+        rules += (
+            "\n- Prewalk inheritance is mandatory: when creating this slice's "
+            f"branch, pass base={required_base}."
+        )
+    if contract_data.get("pattern_setter"):
+        rules += (
+            "\n- You are the Prewalk pattern setter: establish the shared interfaces, "
+            "test fixtures, and reference implementation that later slices will copy."
+        )
     contract = CONTRACT_TEMPLATE.format(
         goal=goal,
         criteria="\n".join(f"- {c}" for c in acceptance_criteria) or "- (none given)",
         context="\n".join(
             f"- {k}: {v}" for k, v in context.items() if k != "shared_lessons"
         ) or "- (none)",
-        rules=spec.contract_rules.format(task_id=child.id),
+        rules=rules,
         done_means=spec.done_means,
     )
     if lessons_block:
@@ -396,6 +410,7 @@ def run_decomposed_goal(
     plan_brain: Brain | None = None,
     depth: int = 0,
     max_depth: int = 2,
+    pattern_setter_brain: Brain | None = None,
 ) -> list[Task]:
     """Fan a parent intent out across one child per declared slice, tracking the
     intent ledger so the parent cannot be called done until every slice is.
@@ -412,6 +427,13 @@ def run_decomposed_goal(
     if not has_ledger(parent):
         open_ledger(parent, intent, decomposition)
     children: list[Task] = []
+    prewalk_state = parent.metadata.get("prewalk", {})
+    pattern_context: dict[str, Any] = {}
+    if isinstance(prewalk_state, dict):
+        if prewalk_state.get("commit_sha"):
+            pattern_context["pattern_commit_sha"] = prewalk_state["commit_sha"]
+        if prewalk_state.get("summary"):
+            pattern_context["pattern_summary"] = prewalk_state["summary"]
     for index, slice_ in enumerate(slices(parent)):
         if slice_.get("status") != SLICE_OPEN or slice_.get("child_id"):
             continue
@@ -434,10 +456,28 @@ def run_decomposed_goal(
         # inputs into the child's context.
         contract_metadata = {
             key: slice_[key]
-            for key in ("allowed_tools", "forbidden_tools", "owned_paths_or_resources")
+            for key in (
+                "allowed_tools",
+                "forbidden_tools",
+                "owned_paths_or_resources",
+                "pattern_setter",
+            )
             if key in slice_
         }
-        slice_context = {**context, **dict(slice_.get("inputs", {}) or {})}
+        slice_context = {
+            **context,
+            **pattern_context,
+            **dict(slice_.get("inputs", {}) or {}),
+        }
+        is_pattern_setter = bool(slice_.get("pattern_setter"))
+        if is_pattern_setter:
+            slice_context["prewalk_role"] = (
+                "pattern_setter: establish interfaces, fixtures, tests, and a reference implementation"
+            )
+        elif pattern_context.get("pattern_commit_sha"):
+            contract_metadata["required_branch_base"] = pattern_context[
+                "pattern_commit_sha"
+            ]
         # Read-before: hand this slice the verified lessons sibling slices have
         # already contributed for this goal, so it builds on what worked and
         # avoids known dead ends (shared_lessons.py). Dispatch is sequential, so
@@ -489,6 +529,7 @@ def run_decomposed_goal(
                 child_brain=brain,
                 depth=depth + 1,
                 max_depth=max_depth,
+                prewalk=pattern_setter_brain is not None,
             )
         else:
             child = run_goal_task(
@@ -497,7 +538,7 @@ def run_decomposed_goal(
                 goal=slice_["goal"],
                 acceptance_criteria=tuple(slice_["acceptance_criteria"]),
                 work_kind=work_kind,
-                brain=brain,
+                brain=(pattern_setter_brain if is_pattern_setter else brain) or brain,
                 broker=broker,
                 context=slice_context,
                 max_steps=max_steps,
@@ -509,6 +550,22 @@ def run_decomposed_goal(
         attach_child(parent, index, child.id)
         if child.status is TaskStatus.DONE:
             mark(parent, child.id, SLICE_SATISFIED)
+            if is_pattern_setter:
+                sha = _git_head(context.get("repo_root"))
+                summary = _latest_completion_summary(child)
+                state = {"summary": summary}
+                if sha:
+                    state["commit_sha"] = sha
+                parent.metadata["prewalk"] = state
+                pattern_context["pattern_summary"] = summary
+                if sha:
+                    pattern_context["pattern_commit_sha"] = sha
+                parent.add_log(
+                    "Orchestrator",
+                    "Prewalk pattern established"
+                    + (f" at {sha[:12]}" if sha else "")
+                    + "; later slices inherit the reference worktree and contract context.",
+                )
         elif child.status is TaskStatus.PENDING_APPROVAL:
             pass  # slice stays open; it resolves when the approval does
         else:
@@ -519,6 +576,12 @@ def run_decomposed_goal(
         if broker.store is not None:
             record_slice_outcome(broker.store, parent.id, child)
         children.append(child)
+        if is_pattern_setter and child.status is not TaskStatus.DONE:
+            parent.add_log(
+                "Orchestrator",
+                "Prewalk pattern setter did not complete; dependent local slices were not dispatched.",
+            )
+            break
 
     settle_parent_against_ledger(parent)
     return children
@@ -539,6 +602,7 @@ def run_orchestrated_goal(
     child_brain: Brain | None = None,
     depth: int = 0,
     max_depth: int = 2,
+    prewalk: bool = False,
 ) -> list[Task]:
     """The full fan-out: propose a decomposition (with the abundance frame),
     review the plan (the counterweight), then dispatch each slice through the
@@ -569,6 +633,8 @@ def run_orchestrated_goal(
         goal, intent, broker.store, brain, cap=cap, task=parent,
         work_kind=work_kind, default_verifiers=spec.verifiers,
     )
+    if prewalk and slices_plan:
+        slices_plan[0]["pattern_setter"] = True
 
     # The deterministic floor (doc §4.3): reject structurally broken plans BEFORE
     # spending model tokens on plan review. A missing verifier, a placeholder
@@ -634,7 +700,32 @@ def run_orchestrated_goal(
         board, parent, intent, slices_plan, work_kind, child_brain, broker, context,
         max_steps=max_steps, cap=cap, max_repairs=max_repairs, review_return=True,
         plan_brain=brain, depth=depth, max_depth=max_depth,
+        pattern_setter_brain=brain if prewalk else None,
     )
+
+
+def _git_head(root: Any) -> str | None:
+    """Read the commit inherited by later Prewalk slices, if this is a Git repo."""
+    if not root:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(str(root)),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _latest_completion_summary(task: Task) -> str:
+    for entry in reversed(task.work_log):
+        if "done" in entry.message.lower() or "verified" in entry.message.lower():
+            return entry.message
+    return task.title
 
 
 def settle_parent_against_ledger(parent: Task) -> None:

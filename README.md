@@ -25,10 +25,14 @@ orac intent protocol
 orac agents list
 orac agents protocol optimiser
 orac tools list
+orac status
+orac estimate "Implement a bounded broker regression test"
 orac ui
 ```
 
 The task board is stored at `.orac/board.json`.
+
+`orac status` combines active-session/WIP observations, the review queue, the Reservoir precaution, and the latest completion digest. `orac estimate "<goal>"` prints bounded token and time ranges; it prints a dollar range only when usage history contains a measured spend rate (or measured spend with its token denominator).
 
 ## Intent agreement gate
 

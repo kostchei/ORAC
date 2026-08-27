@@ -60,20 +60,56 @@ class ReviewQueueSummary:
         }
 
 
+@dataclass(frozen=True)
+class OperatorAdvisorySummary:
+    """One read-only verifier-watch view across human, WIP, and completion state."""
+
+    review_queue: ReviewQueueSummary
+    reservoir: str | None
+    wip: tuple[str, ...]
+    latest_completion: str | None
+
+    @property
+    def is_clear(self) -> bool:
+        return (
+            self.review_queue.is_clear
+            and self.reservoir is None
+            and not self.wip
+        )
+
+    def message(self) -> str:
+        lines = [self.review_queue.message()]
+        lines.extend(self.wip)
+        if self.reservoir:
+            lines.append(self.reservoir)
+        if self.latest_completion:
+            lines.append(f"[promoter] {self.latest_completion}")
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "review_queue": self.review_queue.to_dict(),
+            "reservoir": self.reservoir,
+            "wip": list(self.wip),
+            "latest_completion": self.latest_completion,
+            "is_clear": self.is_clear,
+        }
+
+
 # Default reservoir thresholds (precautionary, non-blocking)
 RESERVOIR_COUNT_THRESHOLD_DEFAULT = 15
 RESERVOIR_SPAN_MINUTES_DEFAULT = 45
 RESERVOIR_IDLE_GAP_MINUTES_DEFAULT = 20
 
 
-def _parse_iso(ts: str) -> datetime:
+def _parse_iso(ts: str) -> datetime | None:
     try:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-    except Exception:
-        return datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_reservoir_config(root: Path | str | None) -> dict[str, Any]:
@@ -127,6 +163,8 @@ def reservoir_advisory(
     latest_dt = None
     for entry in entries:
         entry_dt = _parse_iso(entry.created_at)
+        if entry_dt is None:
+            continue
         if latest_dt is None:
             if (now - entry_dt).total_seconds() > gap_min * 60:
                 break
@@ -150,7 +188,7 @@ def reservoir_advisory(
         return (
             f"[reservoir advisory] {count} queue action(s) cleared in {span_minutes}m "
             f"(threshold: {c_thresh} actions / {s_thresh}m). "
-            "Precaution: review quality degrades during extended queue clearing."
+            "Declared precaution: consider pausing before continuing the queue."
         )
 
     return None
@@ -160,4 +198,36 @@ def review_queue_summary(store: BrokerStore) -> ReviewQueueSummary:
     return ReviewQueueSummary(
         unacked_notifications=len(store.list_notifications(unacked_only=True)),
         pending_approvals=len(store.list_pending()),
+    )
+
+
+def operator_advisory_summary(
+    store: BrokerStore,
+    root: Path | str | None = None,
+    *,
+    current_cwd: Path | str | None = None,
+    check_alive: bool = True,
+) -> OperatorAdvisorySummary:
+    """Combine Phase 1's verifier-watch surfaces with the Promoter digest.
+
+    This is advisory-only: it returns observations and never changes governance
+    decisions. Session TTL pruning remains confined to ``.orac/sessions``.
+    """
+    from orac.promoter import list_promotions
+    from orac.session_registry import wip_advisory
+
+    resolved_root = Path(root or getattr(store, "root", "."))
+    promotions = list_promotions(resolved_root, limit=1)
+    latest = promotions[-1].message() if promotions else None
+    return OperatorAdvisorySummary(
+        review_queue=review_queue_summary(store),
+        reservoir=reservoir_advisory(store),
+        wip=tuple(
+            wip_advisory(
+                resolved_root,
+                current_cwd=current_cwd,
+                check_alive=check_alive,
+            )
+        ),
+        latest_completion=latest,
     )

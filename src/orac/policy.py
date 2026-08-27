@@ -258,6 +258,8 @@ def contract_denial(
     - ``allowed_tools``: when non-empty, an allow-list — any other tool is denied.
     - ``owned_paths_or_resources``: when non-empty, a path-bearing write/commit may
       only touch paths the slice owns.
+    - ``required_branch_base``: a Prewalk worker must branch from the verified
+      pattern-setter commit, never fall back to trunk and lose the pattern.
     """
     if not contract:
         return None
@@ -276,6 +278,14 @@ def contract_denial(
             for candidate in candidates:
                 if not _path_owned(str(candidate), owned):
                     return f"path {candidate!r} is not owned by the slice contract"
+    required_base = str(contract.get("required_branch_base", "")).strip()
+    if required_base and tool == "git.create_branch":
+        actual_base = str((args or {}).get("base", "")).strip()
+        if actual_base != required_base:
+            return (
+                "git.create_branch must use the Prewalk pattern commit as base "
+                f"({required_base!r}); got {actual_base or '(missing)'!r}"
+            )
     return None
 
 

@@ -32,7 +32,7 @@ from orac.model_policy import (
     verify_model_slots,
 )
 from orac.models import Board
-from orac.notify import review_queue_summary
+from orac.notify import operator_advisory_summary, review_queue_summary
 from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
@@ -404,6 +404,9 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         # Notify transport (P6): the review-queue pressure, so the UI can badge
         # the unacked count without a separate poll.
         "review_queue": review_queue_summary(BrokerStore(store.root).init()).to_dict(),
+        "operator_advisory": operator_advisory_summary(
+            BrokerStore(store.root).init(), store.root
+        ).to_dict(),
     }
 
 

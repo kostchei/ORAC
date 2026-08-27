@@ -157,3 +157,44 @@ def test_each_lens_reviews_through_its_own_persona(tmp_path) -> None:
     for prompt in prompts.values():
         assert "repo.write_file" in prompt
         assert "ship a small change" in prompt
+
+
+def test_simple_lens_sees_named_diff_before_commit(tmp_path) -> None:
+    brain = _StubLensBrain(decisions={"Simple": "escalate"})
+    broker, _ = _setup(tmp_path, brain)
+    tracked = tmp_path / "x.py"
+    tracked.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "x.py"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=t", "-c", "user.email=t@t",
+            "commit", "-m", "base",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("VALUE = 2\n", encoding="utf-8")
+    task = Task(title="commit", status=TaskStatus.IN_PROGRESS)
+
+    result = broker.request(
+        CapabilityRequest(
+            agent="Builder",
+            tool="git.commit",
+            task_id=task.id,
+            args={"root": str(tmp_path), "message": "change value", "paths": [str(tracked)]},
+        ),
+        task,
+    )
+
+    assert result.status is CapabilityStatus.PENDING
+    simple_prompt = next(prompt for name, prompt in brain.calls if name == "Simple")
+    assert "proposed diff (read-only, before commit)" in simple_prompt
+    assert "-VALUE = 1" in simple_prompt and "+VALUE = 2" in simple_prompt
+    assert subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip() == "1"

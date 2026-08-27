@@ -7,7 +7,7 @@ from pathlib import Path
 from orac.broker_store import BrokerStore
 from orac.browser_brain import ensure_browser_foundation_ready
 from orac.llm import build_brain, drain_foundation_spend_usd
-from orac.notify import review_queue_summary
+from orac.notify import operator_advisory_summary
 from orac.model_policy import (
     ModelPolicyStore,
     cooldown_browser_provider,
@@ -74,7 +74,7 @@ def run_daemon(root: Path | str = ".", interval_seconds: int = 60, cycles: int =
             )
             # Notify transport (P6): surface the review queue each tick so an
             # unattended run reaches the operator instead of waiting to be polled.
-            summary = review_queue_summary(broker_store)
+            summary = operator_advisory_summary(broker_store, root)
             if not summary.is_clear:
                 print(summary.message())
             time.sleep(interval_seconds)

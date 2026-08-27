@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from orac.agent_registry import load_agent_profiles
 from orac.broker_store import BrokerStore
@@ -118,6 +120,7 @@ class LensReviewer:
         persona = self._personas[slug]
         goal = str(ctx.task.metadata.get("goal", ctx.task.title))
         criteria = "\n".join(f"  - {c}" for c in ctx.task.acceptance_criteria) or "  - (none)"
+        diff_block = self._diff_block(name, ctx)
         return (
             f"{persona}\n\n"
             f"{REVIEW_PROTOCOL}\n\n"
@@ -127,9 +130,73 @@ class LensReviewer:
             f"- task goal: {goal}\n"
             f"- acceptance criteria:\n{criteria}\n"
             f"- arguments:\n{self._args_block(ctx)}\n"
+            f"{diff_block}"
             f"{self._telemetry_block(ctx)}"
             f"\nYour verdict as the {name} lens:"
         )
+
+    def _diff_block(self, lens_name: str, ctx: ReviewContext) -> str:
+        """Give Simple the actual proposed commit diff before commit dispatch.
+
+        The commit adapter stages only after council approval, so this reads the
+        named working-tree paths. Untracked files are included as bounded content.
+        A failed read is stated explicitly and never fabricated.
+        """
+        if lens_name != "Simple" or ctx.request.tool != "git.commit":
+            return ""
+        root_value = ctx.request.args.get("root")
+        if root_value is None and self.store is not None:
+            root_value = self.store.root
+        paths = ctx.request.args.get("paths")
+        if not root_value or not isinstance(paths, list) or not paths:
+            return "- proposed diff: unavailable (commit root or paths missing)\n"
+        root = Path(str(root_value)).resolve()
+        safe_paths: list[Path] = []
+        try:
+            for value in paths:
+                path = Path(str(value))
+                resolved = (root / path).resolve() if not path.is_absolute() else path.resolve()
+                resolved.relative_to(root)
+                safe_paths.append(resolved)
+        except (OSError, ValueError):
+            return "- proposed diff: unavailable (a commit path is outside the repo root)\n"
+
+        relative = [str(path.relative_to(root)) for path in safe_paths]
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "--no-color", "--no-ext-diff", "HEAD", "--", *relative],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            chunks = [proc.stdout] if proc.returncode == 0 and proc.stdout else []
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--", *relative],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            untracked = {
+                line[3:].strip().replace("\\", "/")
+                for line in status.stdout.splitlines()
+                if line.startswith("?? ")
+            }
+            for path, rel in zip(safe_paths, relative):
+                if rel.replace("\\", "/") in untracked and path.is_file():
+                    chunks.append(
+                        f"--- /dev/null\n+++ b/{rel}\n"
+                        + "\n".join(f"+{line}" for line in path.read_text(encoding="utf-8").splitlines())
+                    )
+        except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
+            return f"- proposed diff: unavailable ({type(exc).__name__})\n"
+        diff = "\n".join(chunks).strip()
+        if not diff:
+            return "- proposed diff: no textual changes observed in the named paths\n"
+        shown = diff[:3000]
+        suffix = "" if len(diff) <= 3000 else f"\n…(+{len(diff) - 3000} chars)"
+        return f"- proposed diff (read-only, before commit):\n{shown}{suffix}\n"
 
     def _args_block(self, ctx: ReviewContext) -> str:
         args = dict(ctx.request.args)

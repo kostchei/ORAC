@@ -57,6 +57,9 @@ class SliceContract:
     # run as a single doer. Recursion is bounded by max_depth and the global
     # subagent roster cap (a full roster defers the deeper spawn).
     decompose: bool = False
+    # Prewalk: the first slice establishes interfaces/tests on the frontier
+    # brain; later local workers inherit its worktree and recorded commit SHA.
+    pattern_setter: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -81,6 +84,8 @@ class SliceContract:
             data["integration_note"] = self.integration_note
         if self.decompose:
             data["decompose"] = True
+        if self.pattern_setter:
+            data["pattern_setter"] = True
         return data
 
     @classmethod
@@ -118,6 +123,7 @@ class SliceContract:
             return_evidence=_as_tuple(data.get("return_evidence", ())),
             integration_note=_optional_str(data.get("integration_note")),
             decompose=bool(data.get("decompose", False)),
+            pattern_setter=bool(data.get("pattern_setter", False)),
         )
 
 
