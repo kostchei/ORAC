@@ -42,6 +42,17 @@ def test_goal_outcomes_counts_only_terminal_goals() -> None:
     assert goal_outcomes(board) == (3, 2)
 
 
+def test_goal_outcomes_ignores_superseded_goals() -> None:
+    superseded_task = _goal(TaskStatus.BLOCKED)
+    superseded_task.metadata["superseded"] = True
+    board = _board(
+        3, 2,
+        extra=[superseded_task],
+    )
+    assert goal_outcomes(board) == (3, 2)
+
+
+
 # --- propose_threshold: pure, bounded control law -----------------------------
 
 

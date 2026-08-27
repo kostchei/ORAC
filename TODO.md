@@ -6,12 +6,13 @@ the code-writing and communications surfaces already present.
 
 ## Immediate Operational Readiness
 
-- [ ] **Reconcile persisted board state with implemented work.** The current
+- [x] **Reconcile persisted board state with implemented work.** The current
   board contains old blocked tasks from before later manual recovery commits,
   plus stale active subagent reservations. Preserve the event-log history, but
   make the current board and its telemetry distinguish superseded work, genuine
   blockers, and stale reservations so the self-tuning loop does not learn from
   obsolete failures.
+
 
 - [ ] **Run a supervised live-model canary before an overnight daemon.** Start
   LM Studio, verify the configured model slots, run `orac lenses eval`, then

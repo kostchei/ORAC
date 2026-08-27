@@ -61,6 +61,8 @@ def goal_outcomes(board: "Board") -> tuple[int, int]:
     for task in board.tasks:
         if task.work_kind is None or "goal" not in task.metadata:
             continue
+        if task.metadata.get("superseded"):
+            continue
         if task.status == TaskStatus.DONE:
             done += 1
         elif task.status == TaskStatus.BLOCKED:
