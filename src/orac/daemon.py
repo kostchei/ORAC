@@ -51,20 +51,36 @@ def run_daemon(root: Path | str = ".", interval_seconds: int = 60, cycles: int =
     if policy.get("browser_foundation_provider"):
         result = ensure_browser_foundation_ready(policy, orac_root=root)
         print(f"Browser foundation: {result.get('action')} — {result.get('message', '')}")
+    
+    from orac.session_registry import (
+        record_session_end,
+        record_session_start,
+        wip_advisory,
+    )
+
+    session_file = record_session_start(root, session_type="daemon")
+    wip_notes = wip_advisory(root)
+    for note in wip_notes:
+        print(note)
+
     print(f"ORAC daemon running every {interval_seconds}s. Press Ctrl+C to stop.")
     broker_store = BrokerStore(root).init()
-    while True:
-        tick = run_daemon_tick(store, cycles=cycles)
-        print(
-            f"tick brain={tick.brain} model={tick.model} touched={tick.touched_tasks} "
-            f"done={tick.done_tasks} reason={tick.reason}"
-        )
-        # Notify transport (P6): surface the review queue each tick so an
-        # unattended run reaches the operator instead of waiting to be polled.
-        summary = review_queue_summary(broker_store)
-        if not summary.is_clear:
-            print(summary.message())
-        time.sleep(interval_seconds)
+    try:
+        while True:
+            tick = run_daemon_tick(store, cycles=cycles)
+            print(
+                f"tick brain={tick.brain} model={tick.model} touched={tick.touched_tasks} "
+                f"done={tick.done_tasks} reason={tick.reason}"
+            )
+            # Notify transport (P6): surface the review queue each tick so an
+            # unattended run reaches the operator instead of waiting to be polled.
+            summary = review_queue_summary(broker_store)
+            if not summary.is_clear:
+                print(summary.message())
+            time.sleep(interval_seconds)
+    finally:
+        record_session_end(session_file)
+
 
 
 def run_daemon_tick(store: BoardStore, cycles: int = 1) -> DaemonTick:
