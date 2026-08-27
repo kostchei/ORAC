@@ -338,6 +338,26 @@ class BrokerStore:
             for row in rows
         ]
 
+    def human_audit_log(self, limit: int = 100) -> list[AuditEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM audit WHERE agent = 'human' ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            AuditEntry(
+                id=row["id"],
+                created_at=row["created_at"],
+                agent=row["agent"],
+                tool=row["tool"],
+                task_id=row["task_id"],
+                status=row["status"],
+                message=row["message"],
+                args=json.loads(row["args_json"]),
+            )
+            for row in rows
+        ]
+
+
     # --- audit queries used by the deterministic council lenses ------------
 
     def audit_count(self, agent: str, tool: str, task_id: str) -> int:
