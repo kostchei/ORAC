@@ -40,8 +40,10 @@ from orac.resources import read_resource_snapshot
 from orac.scrum import Scrum
 from orac.storage import BoardStore
 from orac.task_registry import TaskRegistry
+from orac.notify import reservoir_advisory, review_queue_summary
 from orac.ui_server import run_ui
 from orac.daemon import run_daemon
+
 
 # Friendly CLI names for the LM Studio model slots in model_policy.DEFAULT_POLICY.
 # "small" is the busy-box model and the model the council's LLM lenses run on.
@@ -59,6 +61,13 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("init", help="Create an ORAC board in this repo.")
+    subparsers.add_parser("status", help="Show system status, active sessions, WIP advisory, and review queue.")
+
+    estimate_cmd = subparsers.add_parser(
+        "estimate", help="Prospective token, time, and cost estimate for a goal."
+    )
+    estimate_cmd.add_argument("goal", help="Goal description text to estimate.")
+
 
     add = subparsers.add_parser("add", help="Add a backlog task.")
     add.add_argument("title")
@@ -711,12 +720,28 @@ def cmd_approve(store: BoardStore, args: argparse.Namespace, status: str) -> int
         print(str(exc))
         return 1
     pending = bstore.get_pending(args.id)
+    bstore.record_audit(
+        CapabilityRequest(
+            agent="human",
+            tool=f"queue.{status}",
+            task_id=pending.task_id,
+            args={"id": args.id},
+        ),
+        CapabilityResult(
+            status=CapabilityStatus.ALLOWED,
+            tool=f"queue.{status}",
+            message=f"{status.capitalize()} pending {args.id}",
+        ),
+    )
     outcome = (
         "the loop will resume the parked task"
         if status == "approved"
         else "the loop will block the parked task"
     )
     print(f"{status.capitalize()} [{args.id}] {pending.agent} {pending.tool}; {outcome}.")
+    adv = reservoir_advisory(bstore)
+    if adv:
+        print(adv)
     return 0
 
 
@@ -728,7 +753,23 @@ def cmd_ack(store: BoardStore, args: argparse.Namespace) -> int:
         print(str(exc))
         return 1
     note = bstore.get_notification(args.id)
+    bstore.record_audit(
+        CapabilityRequest(
+            agent="human",
+            tool="queue.ack",
+            task_id=note.task_id,
+            args={"id": args.id},
+        ),
+        CapabilityResult(
+            status=CapabilityStatus.ALLOWED,
+            tool="queue.ack",
+            message=f"Acked notification {args.id}",
+        ),
+    )
     print(f"Acked [{args.id}] {note.agent} {note.tool}: {note.message}")
+    adv = reservoir_advisory(bstore)
+    if adv:
+        print(adv)
     return 0
 
 
@@ -792,7 +833,11 @@ def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
     if not note.acked:
         bstore.ack_notification(note.id)
     print(f"Rolled back and acked [{note.id}] {note.agent} {note.tool}.")
+    adv = reservoir_advisory(bstore)
+    if adv:
+        print(adv)
     return 0
+
 
 
 def cmd_standing_list(store: BoardStore) -> int:
@@ -1043,6 +1088,48 @@ def cmd_scrum_run(store: BoardStore, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_status(store: BoardStore) -> int:
+    bstore = BrokerStore(store.root).init()
+    policy_store = ModelPolicyStore(store)
+    decision = policy_store.decide()
+    board = store.load()
+
+    from collections import Counter
+    status_counts = Counter(task.status.value for task in board.tasks)
+    status_str = ", ".join(f"{k}: {v}" for k, v in sorted(status_counts.items())) or "no tasks"
+
+    print("ORAC Status")
+    print(f"  Board revision: {board.revision} ({len(board.tasks)} tasks: {status_str})")
+    print(f"  Model brain:    {decision.brain} ({decision.model}) — {decision.reason}")
+
+    # Sessions & WIP
+    from orac.session_registry import live_sessions, wip_advisory
+    sessions = live_sessions(store.root)
+    print(f"  Active sessions: {len(sessions)}")
+    for s in sessions:
+        print(f"    - PID {s.get('pid')} [{s.get('type')}] cwd: {s.get('cwd')}")
+    wip_notes = wip_advisory(store.root)
+    for note in wip_notes:
+        print(f"    {note}")
+
+    # Review Queue & Reservoir
+    summary = review_queue_summary(bstore)
+    print(f"  Review queue:   {summary.message()}")
+    res_adv = reservoir_advisory(bstore)
+    if res_adv:
+        print(f"  {res_adv}")
+
+    return 0
+
+
+def cmd_estimate(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.cost_estimate import estimate_goal
+
+    estimate = estimate_goal(args.goal, root=store.root)
+    print(estimate.format_cli())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_output_encoding()
     parser = make_parser()
@@ -1051,8 +1138,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return cmd_init(store)
+    if args.command == "status":
+        return cmd_status(store)
+    if args.command == "estimate":
+        return cmd_estimate(store, args)
     if args.command == "add":
         return cmd_add(store, args)
+
     if args.command == "list":
         return cmd_list(store, args)
     if args.command == "board" and args.board_command == "recover":
