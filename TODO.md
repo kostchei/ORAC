@@ -14,19 +14,21 @@ the code-writing and communications surfaces already present.
   obsolete failures.
 
 
-- [ ] **Run a supervised live-model canary before an overnight daemon.** Start
+- [x] **Run a supervised live-model canary before an overnight daemon.** Start
   LM Studio, verify the configured model slots, run `orac lenses eval`, then
   run `python scripts/soak_validate.py 3`. Record whether each tick completes
   verified work without malformed structured replies, step-budget exhaustion,
   leaked roster reservations, or unexpected review-queue entries.
-  **Attempt 2026-08-28:** all three configured slots were loadable and the live
+  **Completed 2026-08-28:** all three configured slots were loadable and the live
   lens scorecard scored 16/16 decisive cases with a healthy 1-pass/2-stop
-  borderline split. Three ticks ran without new queue entries, malformed logs,
-  or leaked reservations, but no task reached `done` and the Builder left the
-  checkout on `build/unack-review-count`. That is not a passing end-to-end
-  canary. The harness now requires a clean starting tree, records Git drift, and
-  fails when no new verified work completes; rerun after fixing the stranded
-  build path.
+  borderline split. The first soak exposed structured fallback, search/read
+  churn, permissive decision schemas, and a false review-queue remediation loop;
+  each was fixed with regression coverage. The final clean run seeded an explicit
+  no-edit verification task: parent `e4a2381d` and independently verified child
+  `c27fd722` reached `done` in tick 1 (100.8s); ticks 2–3 were idle. It introduced
+  no queue entries, pending approvals, malformed/budget logs, dirty files, or
+  leaked reservations. HEAD remained `a510ba3`; only the expected checkpoint
+  branch changed.
 
 ## Safety and Verification
 

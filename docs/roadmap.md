@@ -135,11 +135,12 @@ category starts until item 4 has produced real evidence.
    `python scripts/soak_validate.py 3` for a small observed run. Promote to an overnight daemon
    only after the canary completes verified work without malformed model replies, step-budget
    exhaustion, leaked roster reservations, or unexpected review-queue entries.
-   **2026-08-28 attempt:** model-slot verification passed and live lens evaluation scored 16/16
-   decisive cases. The three-tick soak exposed a stranded build: no task reached `done` and the
-   checkout moved to `build/unack-review-count`. The harness now fails on no verified completion,
-   requires a clean starting tree, and reports Git drift. Fix that build path before promoting the
-   canary or running overnight.
+   **Completed 2026-08-28:** model-slot verification passed and live lens evaluation scored 16/16
+   decisive cases. Early soak attempts exposed and drove fixes for unstructured fallback,
+   search/read churn, an overly permissive session schema, and recursive review-queue remediation.
+   In the final clean run, seeded parent `e4a2381d` and independently verified child `c27fd722`
+   reached `done` in tick 1 (100.8s); ticks 2–3 were idle. No new queue/pending entries,
+   malformed/budget logs, dirty files, or live reservations appeared, and HEAD did not move.
 
 ---
 
