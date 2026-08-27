@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +85,7 @@ def test_builder_branch_write_commit_loop(tmp_path) -> None:
 
     found = build("repo.search", query="VALUE = 1")
     assert found.data["count"] >= 1
+    assert [Path(item).as_posix() for item in found.data["files"]] == ["pkg/hello.py"]
 
     committed = build(
         "git.commit", message="add hello", paths=[str(tmp_path / "pkg" / "hello.py")]
@@ -92,6 +94,27 @@ def test_builder_branch_write_commit_loop(tmp_path) -> None:
     assert len(committed.data["sha"]) == 40
 
     assert build("git.status").data["changes"] == []
+
+
+def test_repo_search_excludes_ignored_runtime_state(tmp_path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "live.py").write_text("TARGET = 1\n", encoding="utf-8")
+    (tmp_path / ".orac" / "board.json").write_text("TARGET = stale\n", encoding="utf-8")
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+
+    result = broker.request(
+        CapabilityRequest(
+            agent="Builder",
+            tool="repo.search",
+            task_id="t",
+            args={"root": str(tmp_path), "query": "TARGET"},
+        ),
+        Task(title="search"),
+    )
+
+    assert [Path(item).as_posix() for item in result.data["files"]] == ["src/live.py"]
+    assert all(".orac" not in item["path"] for item in result.data["matches"])
 
 
 def test_builds_fork_from_trunk_not_from_previous_build(tmp_path) -> None:

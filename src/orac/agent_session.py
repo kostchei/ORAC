@@ -51,7 +51,9 @@ RESPONSE PROTOCOL — reply with a single JSON object and nothing else:
   {"done": true, "summary": "<what you produced and how it was verified>"}
   {"blocked": true, "reason": "<what stops you>"}
 Use one tool per reply. Tool results appear as OBSERVATION lines. If a tool is
-denied or fails, adapt; do not repeat the identical call."""
+denied or fails, adapt; do not repeat the identical call. Investigation is
+bounded: after search identifies candidate files, read one and act; do not spend
+the session varying search phrases without making progress."""
 
 
 @dataclass(frozen=True)
@@ -87,12 +89,15 @@ class AgentSession:
                     self.profile.name,
                     self.profile.slug,
                     task,
-                    self._prompt(task, contract),
+                    self._prompt(task, contract, step),
                     DECISION_SCHEMA,
                 )
             else:
                 reply = self.brain.think(
-                    self.profile.name, self.profile.slug, task, self._prompt(task, contract)
+                    self.profile.name,
+                    self.profile.slug,
+                    task,
+                    self._prompt(task, contract, step),
                 )
             decision = parse_decision(reply)
             if decision is None:
@@ -167,7 +172,7 @@ class AgentSession:
             ),
         )
 
-    def _prompt(self, task: Task, contract: str) -> str:
+    def _prompt(self, task: Task, contract: str, step: int) -> str:
         tools = get_tool_map()
         specs = "\n".join(
             f"- {name}: {tools[name].description} (inputs: {', '.join(tools[name].inputs)})"
@@ -175,15 +180,36 @@ class AgentSession:
             if name in tools
         )
         history = "\n".join(self.transcript) if self.transcript else "(no actions yet)"
+        searches = self._trailing_tool_uses("repo.search")
+        guidance = (
+            f"Step {step}/{self.max_steps}; {self.max_steps - step + 1} decision(s) remain. "
+            "Reserve time to implement, test, commit, and return done."
+        )
+        if searches >= 2:
+            guidance += (
+                f" You have made {searches} consecutive searches; choose a candidate "
+                "file from the latest observation and read or edit it now."
+            )
         return (
             f"{self.profile.system_prompt}\n\n"
             f"{self._preamble}"
             f"{PROTOCOL}\n\n"
             f"YOUR TOOLS:\n{specs}\n\n"
             f"CONTRACT:\n{contract}\n\n"
+            f"STEP BUDGET:\n{guidance}\n\n"
             f"TRANSCRIPT:\n{history}\n\n"
             "Your next JSON decision:"
         )
+
+    def _trailing_tool_uses(self, tool: str) -> int:
+        count = 0
+        for entry in reversed(self.transcript):
+            if not entry.startswith("ACTION "):
+                continue
+            if f": {tool} " not in entry:
+                break
+            count += 1
+        return count
 
     def _finish(self, task: Task, result: SessionResult) -> SessionResult:
         task.add_log(

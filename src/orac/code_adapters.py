@@ -121,9 +121,25 @@ class CodeAdapterSet:
         root = self._root_for(req.args.get("root"))
         query = req.args["query"]
         matches: list[dict[str, object]] = []
-        for path in root.rglob("*"):
-            if not path.is_file() or ".git" in path.parts:
-                continue
+        # Search the Git-visible working set (tracked files plus non-ignored
+        # untracked files). Runtime state under ignored `.orac`, virtualenvs,
+        # caches, and build products otherwise swamp source matches and can trap
+        # a model in an investigation loop.
+        listed = self._git(
+            root, "ls-files", "--cached", "--others", "--exclude-standard", "-z",
+            check=False,
+        )
+        if listed.returncode == 0:
+            paths = [root / name for name in listed.stdout.split("\0") if name]
+        else:
+            paths = [
+                path
+                for path in root.rglob("*")
+                if path.is_file()
+                and not any(part in {".git", ".orac", "__pycache__"} for part in path.parts)
+            ]
+        paths.sort(key=lambda path: _search_path_priority(root, path))
+        for path in paths:
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
@@ -137,10 +153,19 @@ class CodeAdapterSet:
                         break
             if len(matches) >= SEARCH_RESULT_LIMIT:
                 break
+        files = list(dict.fromkeys(str(Path(item["path"]).relative_to(root)) for item in matches))
         return ToolResult(
             "repo.search",
             f"Found {len(matches)} match(es) for {query!r}.",
-            {"query": query, "matches": matches, "count": len(matches)},
+            {
+                "query": query,
+                # Candidate paths come before verbose line matches in the model
+                # observation so the next useful action is visible even when
+                # the transcript truncates a broad search result.
+                "files": files[:25],
+                "count": len(matches),
+                "matches": matches,
+            },
         )
 
     def status(self, req: CapabilityRequest) -> ToolResult:
@@ -355,3 +380,11 @@ def code_adapters_for(
 ) -> dict[str, Adapter]:
     resolved = tuple(Path(r).resolve() for r in roots)
     return CodeAdapterSet(resolved, base_branch=base_branch).adapters()
+
+
+def _search_path_priority(root: Path, path: Path) -> tuple[int, str]:
+    """Put implementation and test paths before prose/runtime-adjacent files."""
+    relative = path.relative_to(root)
+    top = relative.parts[0] if relative.parts else ""
+    rank = 0 if top in {"src", "app", "lib", "tests"} else 1 if top == "docs" else 2
+    return rank, relative.as_posix()
