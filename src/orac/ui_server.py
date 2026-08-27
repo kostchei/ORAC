@@ -10,7 +10,12 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from orac.audio_io import audio_status, speak_text, transcribe_base64_audio
+from orac.audio_io import (
+    audio_capabilities,
+    audio_status,
+    speak_text,
+    transcribe_base64_audio,
+)
 from orac.broker_store import BrokerStore
 from orac.browser_brain import cdp_reachable, ensure_browser_foundation_ready
 from orac.chat_processes import ChatProcessRuntime
@@ -400,7 +405,10 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         "model_policy": decision.to_dict(),
         "loaded_models": lmstudio_loaded_models(),
         "settings": ModelPolicyStore(store).load_policy(),
-        "audio": audio_status().to_dict(),
+        # Hardware enumeration is quarantined behind /api/audio/devices; core
+        # state polling reports only cheap capability flags and never runs
+        # PortAudio/PowerShell probes.
+        "audio": audio_capabilities().to_dict(),
         # Notify transport (P6): the review-queue pressure, so the UI can badge
         # the unacked count without a separate poll.
         "review_queue": review_queue_summary(BrokerStore(store.root).init()).to_dict(),

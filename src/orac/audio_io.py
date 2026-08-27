@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import importlib.util
 import json
 import os
@@ -28,6 +29,7 @@ class AudioStatus:
     default_speaker: str | None
     whisper_available: bool
     tts_available: bool
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,17 +39,45 @@ class AudioStatus:
             "default_speaker": self.default_speaker,
             "whisper_available": self.whisper_available,
             "tts_available": self.tts_available,
+            "error": self.error,
         }
 
 
 def audio_status() -> AudioStatus:
-    microphones, speakers = detect_audio_devices()
-    default_microphone, default_speaker = detect_default_audio_devices()
+    errors: list[str] = []
+    try:
+        microphones, speakers = detect_audio_devices()
+    except Exception as exc:  # noqa: BLE001 - optional hardware cannot break core state
+        microphones, speakers = [], []
+        errors.append(f"device detection: {type(exc).__name__}: {exc}")
+    try:
+        default_microphone, default_speaker = detect_default_audio_devices()
+    except Exception as exc:  # noqa: BLE001 - optional hardware cannot break core state
+        default_microphone, default_speaker = None, None
+        errors.append(f"default device: {type(exc).__name__}: {exc}")
     return AudioStatus(
         microphones=microphones,
         speakers=speakers,
         default_microphone=default_microphone,
         default_speaker=default_speaker,
+        whisper_available=_module_available("whisper"),
+        tts_available=_module_available("pyttsx3") or os.name == "nt",
+        error="; ".join(errors) or None,
+    )
+
+
+def audio_capabilities() -> AudioStatus:
+    """Cheap, hardware-free status for core UI polling.
+
+    Device enumeration can invoke PortAudio or PowerShell and belongs only on
+    the explicit audio endpoint. The task cockpit must stay responsive even when
+    every optional audio dependency or device probe is broken.
+    """
+    return AudioStatus(
+        microphones=[],
+        speakers=[],
+        default_microphone=None,
+        default_speaker=None,
         whisper_available=_module_available("whisper"),
         tts_available=_module_available("pyttsx3") or os.name == "nt",
     )
@@ -79,7 +109,14 @@ def transcribe_base64_audio(audio_base64: str, suffix: str = ".webm") -> dict[st
             "error": "Python package `openai-whisper` is not installed.",
         }
     model_name = os.environ.get("ORAC_WHISPER_MODEL", "base")
-    audio_bytes = base64.b64decode(audio_base64)
+    try:
+        audio_bytes = base64.b64decode(audio_base64, validate=True)
+    except (binascii.Error, ValueError, TypeError) as exc:
+        return {"ok": False, "text": "", "error": f"Invalid base64 audio: {exc}"}
+    if not audio_bytes:
+        return {"ok": False, "text": "", "error": "No audio bytes supplied."}
+    if len(audio_bytes) > 25 * 1024 * 1024:
+        return {"ok": False, "text": "", "error": "Audio exceeds the 25 MiB local limit."}
     suffix = _safe_audio_suffix(suffix)
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
@@ -115,7 +152,10 @@ def transcribe_base64_audio(audio_base64: str, suffix: str = ".webm") -> dict[st
         output_path = temp_path / "recording.json"
         if not output_path.exists():
             return {"ok": False, "text": "", "error": "Whisper did not produce JSON output."}
-        data = json.loads(output_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"ok": False, "text": "", "error": f"Invalid Whisper output: {exc}"}
         return {"ok": True, "text": str(data.get("text", "")).strip(), "model": model_name}
 
 
@@ -139,7 +179,10 @@ def speak_text(text: str) -> dict[str, Any]:
 
 
 def _module_available(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
 
 
 def _sounddevice_devices() -> tuple[list[AudioDevice], list[AudioDevice]] | None:

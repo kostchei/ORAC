@@ -57,10 +57,13 @@ the code-writing and communications surfaces already present.
 
 ## Optional Surfaces
 
-- [ ] **Quarantine audio from the core loop.** Treat browser mic permission,
+- [x] **Quarantine audio from the core loop.** Treat browser mic permission,
   WebM, `ffmpeg`, Whisper, and local TTS as convenience features only. Audio
   failures must never block task flow, daemon ticks, review handling, or the
-  Builder path.
+  Builder path. Core UI state now uses hardware-free capability checks; device
+  enumeration runs only on the explicit audio endpoint. Device/module failures,
+  malformed base64, oversized payloads, and invalid Whisper output return
+  bounded error objects. Covered by `tests/test_audio_quarantine.py`.
 
 ## State Durability
 
