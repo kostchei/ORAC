@@ -31,6 +31,7 @@ TEST_TOOLS = frozenset({"repo.run_tests"})
 CODE_TOOLS = READ_TOOLS | WRITE_TOOLS | TEST_TOOLS
 
 SEARCH_RESULT_LIMIT = 200
+READ_LINE_LIMIT = 160
 
 
 @dataclass(frozen=True)
@@ -110,11 +111,29 @@ class CodeAdapterSet:
         path = self._resolve_in_root(req.args["path"])
         if not path.is_file():
             raise FileNotFoundError(f"repo.read_file: no file at {path}.")
-        content = path.read_text(encoding="utf-8")
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        total_lines = len(lines)
+        start = int(req.args.get("start_line", 1))
+        if start < 1:
+            raise ValueError("repo.read_file: start_line must be at least 1.")
+        requested_end = int(req.args.get("end_line", start + READ_LINE_LIMIT - 1))
+        if requested_end < start:
+            raise ValueError("repo.read_file: end_line must not precede start_line.")
+        end = min(total_lines, requested_end, start + READ_LINE_LIMIT - 1)
+        content = "" if start > total_lines else "".join(lines[start - 1 : end])
+        has_more = end < total_lines
         return ToolResult(
             "repo.read_file",
-            f"Read {len(content)} chars from {path}.",
-            {"path": str(path), "content": content},
+            f"Read lines {start}-{end} of {total_lines} from {path}.",
+            {
+                "path": str(path),
+                "start_line": start,
+                "end_line": end,
+                "total_lines": total_lines,
+                "has_more": has_more,
+                "next_start_line": end + 1 if has_more else None,
+                "content": content,
+            },
         )
 
     def search(self, req: CapabilityRequest) -> ToolResult:

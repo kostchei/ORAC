@@ -117,6 +117,39 @@ def test_repo_search_excludes_ignored_runtime_state(tmp_path) -> None:
     assert all(".orac" not in item["path"] for item in result.data["matches"])
 
 
+def test_repo_read_file_is_line_bounded_and_supports_ranges(tmp_path) -> None:
+    _init_repo(tmp_path)
+    source = tmp_path / "long.py"
+    source.write_text("".join(f"line {i}\n" for i in range(1, 202)), encoding="utf-8")
+    broker = ToolBroker.from_store(_store(tmp_path), repo_root=tmp_path)
+    task = Task(title="read")
+
+    first = broker.request(
+        CapabilityRequest(
+            agent="Builder", tool="repo.read_file", task_id="t", args={"path": "long.py"}
+        ),
+        task,
+    )
+    assert first.data["start_line"] == 1
+    assert first.data["end_line"] == 160
+    assert first.data["next_start_line"] == 161
+    assert "line 160\n" in first.data["content"]
+    assert "line 161\n" not in first.data["content"]
+
+    tail = broker.request(
+        CapabilityRequest(
+            agent="Builder",
+            tool="repo.read_file",
+            task_id="t",
+            args={"path": "long.py", "start_line": 161},
+        ),
+        task,
+    )
+    assert tail.data["end_line"] == 201
+    assert tail.data["has_more"] is False
+    assert tail.data["content"].startswith("line 161\n")
+
+
 def test_builds_fork_from_trunk_not_from_previous_build(tmp_path) -> None:
     # The daemon leaves HEAD on a build branch for human review. The NEXT build
     # must still fork from the trunk, not from that unreviewed branch — otherwise

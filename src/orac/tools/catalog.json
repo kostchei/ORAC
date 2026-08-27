@@ -116,9 +116,9 @@
     },
     {
       "name": "repo.read_file",
-      "description": "Read a text file inside an approved repo root.",
-      "regular_use": "Builder reads source before changing it.",
-      "inputs": ["task_id", "path"]
+      "description": "Read at most 160 lines of a text file inside an approved repo root. Optional start_line/end_line select a later range; use next_start_line from the observation instead of repeating the same call.",
+      "regular_use": "Builder reads a bounded source range before changing it.",
+      "inputs": ["task_id", "path", "start_line (optional)", "end_line (optional)"]
     },
     {
       "name": "repo.search",

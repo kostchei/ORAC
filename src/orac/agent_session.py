@@ -25,7 +25,8 @@ from orac.models import CapabilityRequest, CapabilityStatus, Task
 # through the broker — grants, council floor, risk model, audit. A denial is an
 # observation the model can adapt to, not a crash.
 
-OBSERVATION_LIMIT = 1500
+OBSERVATION_LIMIT = 6000
+TRANSCRIPT_LIMIT = 18000
 DEFAULT_MAX_STEPS = 16
 
 # Enforced server-side where the brain supports structured output (LM Studio /
@@ -77,6 +78,8 @@ class AgentSession:
     knowledge: KnowledgeBase | None = None
     _injected_skills: list[Skill] = field(default_factory=list)
     _preamble: str = ""
+    _last_call_key: str = ""
+    _same_call_streak: int = 0
 
     def run(self, task: Task, contract: str) -> SessionResult:
         if self.knowledge is not None:
@@ -136,6 +139,30 @@ class AgentSession:
                     ),
                 )
             args = decision.get("args") or {}
+            call_key = json.dumps(
+                {"tool": str(tool), "args": dict(args)}, sort_keys=True, default=str
+            )
+            if call_key == self._last_call_key:
+                self._same_call_streak += 1
+                self.transcript.append(
+                    f"ACTION {step}: {tool} {json.dumps(dict(args))[:400]}"
+                )
+                self.transcript.append(
+                    f"OBSERVATION {step} [duplicate-refused]: identical call already "
+                    "returned the same observation; change the arguments or take the next action."
+                )
+                if self._same_call_streak >= 3:
+                    return self._finish(
+                        task,
+                        SessionResult(
+                            status="blocked",
+                            summary=f"Repeated identical {tool} call three times.",
+                            steps=step,
+                        ),
+                    )
+                continue
+            self._last_call_key = call_key
+            self._same_call_streak = 1
             try:
                 result = self.broker.request(
                     CapabilityRequest(
@@ -179,7 +206,7 @@ class AgentSession:
             for name in self.profile.tools
             if name in tools
         )
-        history = "\n".join(self.transcript) if self.transcript else "(no actions yet)"
+        history = self._bounded_history()
         searches = self._trailing_tool_uses("repo.search")
         guidance = (
             f"Step {step}/{self.max_steps}; {self.max_steps - step + 1} decision(s) remain. "
@@ -210,6 +237,23 @@ class AgentSession:
                 break
             count += 1
         return count
+
+    def _bounded_history(self) -> str:
+        if not self.transcript:
+            return "(no actions yet)"
+        kept: list[str] = []
+        used = 0
+        for entry in reversed(self.transcript):
+            cost = len(entry) + 1
+            if kept and used + cost > TRANSCRIPT_LIMIT:
+                break
+            kept.append(entry)
+            used += cost
+        kept.reverse()
+        if len(kept) < len(self.transcript):
+            omitted = len(self.transcript) - len(kept)
+            kept.insert(0, f"({omitted} older transcript entries omitted to stay in context)")
+        return "\n".join(kept)
 
     def _finish(self, task: Task, result: SessionResult) -> SessionResult:
         task.add_log(

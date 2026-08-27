@@ -120,6 +120,27 @@ def test_session_treats_a_tool_exception_as_an_observation(tmp_path) -> None:
     assert "PermissionError" in brain.prompts[-1]  # the fault reached the model
 
 
+def test_session_refuses_repeated_identical_calls_before_budget_exhaustion(tmp_path) -> None:
+    broker, store = _setup(tmp_path)
+    call = json.dumps({"tool": "repo.search", "args": {"root": str(tmp_path), "query": "x"}})
+    brain = ScriptedBrain([call, call, call])
+    task = Task(title="loop", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: do not loop."
+    )
+
+    assert result.status == "blocked"
+    assert "Repeated identical repo.search" in result.summary
+    assert store.audit_count_exact(
+        "Builder",
+        "repo.search",
+        task.id,
+        json.dumps({"query": "x", "root": str(tmp_path)}, sort_keys=True),
+    ) == 1
+    assert "duplicate-refused" in brain.prompts[-1]
+
+
 def test_session_unparseable_reply_blocks_without_crashing(tmp_path) -> None:
     broker, _ = _setup(tmp_path)
     brain = ScriptedBrain(["I think I should probably create a branch first?"])
