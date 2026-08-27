@@ -133,6 +133,20 @@ def test_openai_compatible_brain_rejects_truncated_reasoning(monkeypatch) -> Non
         )
 
 
+def test_structured_fallback_refuses_unstructured_rules_reply() -> None:
+    import pytest
+    from orac.llm import FallbackBrain, RulesBrain
+
+    class FailingBrain:
+        def think_json(self, *args, **kwargs):
+            raise RuntimeError("timed out")
+
+    brain = FallbackBrain(primary=FailingBrain(), fallback=RulesBrain())
+
+    with pytest.raises(RuntimeError, match="does not support structured output"):
+        brain.think_json("Builder", "builder", Task(title="x"), "go", {})
+
+
 def test_model_for_work_kind_uses_slots() -> None:
     policy = dict(DEFAULT_POLICY)
     policy.update(
@@ -291,6 +305,9 @@ def test_session_brain_for_routes_by_kind_and_escalation(tmp_path) -> None:
     local = session_brain_for(policy_store, Task(title="t", work_kind="code"))
     assert isinstance(local.primary, LMStudioBrain)
     assert local.primary.model == "qwen3-coder-next"
+    assert local.primary.timeout_seconds == 120
+    assert local.primary.max_tokens == 4096
+    assert local.primary.reasoning_effort == "none"
 
     escalated = session_brain_for(
         policy_store, Task(title="t", work_kind="code", metadata={"escalated": True})

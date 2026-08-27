@@ -263,7 +263,10 @@ class FallbackBrain:
         fallback_json = getattr(self.fallback, "think_json", None)
         if callable(fallback_json):
             return fallback_json(agent_name, role, task, prompt, schema)
-        return self.fallback.think(agent_name, role, task, prompt)
+        raise RuntimeError(
+            "Structured model request failed and the fallback brain does not support "
+            "structured output; refusing an unstructured substitute."
+        )
 
 
 def _should_not_fallback(exc: RuntimeError) -> bool:

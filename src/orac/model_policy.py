@@ -192,7 +192,7 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
     (stored in task.metadata["browser_provider"]).  Everything else runs
     locally on the work-kind model slot.
     """
-    from orac.llm import build_brain
+    from orac.llm import FallbackBrain, LMStudioBrain, build_brain
 
     if task.metadata.get("escalated"):
         policy = policy_store.load_policy()
@@ -205,7 +205,17 @@ def session_brain_for(policy_store: "ModelPolicyStore", task: Any) -> Any:
             return build_brain("browser", model=provider)
         return build_brain("foundation")
     policy = policy_store.load_policy()
-    return build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
+    brain = build_brain("lmstudio", model=model_for_work_kind(policy, task.work_kind))
+    # Agent sessions require structured tool/done/blocked decisions. Local
+    # reasoning models otherwise spend the generic 60-second window narrating a
+    # chain of thought and then fall through to an unstructured RulesBrain reply.
+    # Keep enough output room for write_file arguments while requesting the
+    # direct schema answer and allowing a cold local model a bounded two minutes.
+    if isinstance(brain, FallbackBrain) and isinstance(brain.primary, LMStudioBrain):
+        brain.primary.timeout_seconds = 120
+        brain.primary.max_tokens = 4096
+        brain.primary.reasoning_effort = "none"
+    return brain
 
 
 def foundation_brain_for(policy_store: "ModelPolicyStore") -> Any:
