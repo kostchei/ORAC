@@ -117,6 +117,9 @@ step-budget exhaustion, stale subagent reservations, or unexpected review items.
 The harness requires a clean Git worktree, snapshots pre-existing queue and
 roster state, reports each tick's model, duration, and Git drift, and exits
 non-zero unless new verified work completes without a newly detected failure.
+When the board has no actionable work, it seeds one explicit canary task that
+may create its checkpoint branch and run notification tests but must not edit
+source, tests, documentation, or configuration.
 
 ## Review queue (review-after, not ask-before)
 

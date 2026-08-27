@@ -15,12 +15,14 @@ from typing import Any
 
 from orac.broker_store import BrokerStore
 from orac.daemon import run_daemon_tick
+from orac.driver import board_is_idle
 from orac.model_policy import (
     ModelPolicyStore,
     ensure_lmstudio_model_loaded,
     verify_model_slots,
 )
 from orac.notify import review_queue_summary
+from orac.models import Task, TaskStatus
 from orac.storage import BoardStore
 
 ROOT = "."
@@ -68,6 +70,38 @@ def _git_state(root: str) -> dict[str, str]:
     }
 
 
+def _seed_canary_task(store: BoardStore) -> str | None:
+    """Add one explicit, non-mutating code task when no real work is actionable."""
+    board = store.load()
+    if not board_is_idle(board):
+        return None
+    task = Task(
+        title="Canary: verify the notification summary without changing source",
+        description=(
+            "Run the focused notification regression tests and inspect Git status. "
+            "Do not edit source, tests, docs, or configuration."
+        ),
+        status=TaskStatus.READY,
+        work_kind="code",
+        acceptance_criteria=[
+            "tests/test_notify.py passes through repo.run_tests",
+            "git.status reports no changed files",
+            "the Builder returns a concise done decision with that evidence",
+        ],
+        metadata={
+            "origin": "supervised-canary",
+            "goal": (
+                "Create the required checkpoint branch, run tests/test_notify.py, "
+                "confirm git.status is clean, and return done without modifying files."
+            ),
+        },
+    )
+    task.add_log("system", "Seeded by the supervised live-model canary.")
+    board.add_task(task)
+    store.save(board)
+    return task.id
+
+
 def main(ticks: int | None = None) -> None:
     ticks = ticks if ticks is not None else (int(sys.argv[1]) if len(sys.argv) > 1 else 3)
     baseline_git = _git_state(ROOT)
@@ -89,6 +123,9 @@ def main(ticks: int | None = None) -> None:
         raise SystemExit(f"slots missing: {slots['missing']}")
 
     broker_store = BrokerStore(ROOT).init()
+    seeded_task = _seed_canary_task(store)
+    if seeded_task:
+        print(f"[baseline] seeded non-mutating canary task {seeded_task}")
     baseline_notifications = {item.id for item in broker_store.list_notifications()}
     baseline_pending = {item.id for item in broker_store.list_pending()}
     baseline_active = _active_ids(broker_store)
@@ -137,6 +174,8 @@ def main(ticks: int | None = None) -> None:
         failures.append(f"leaked active subagent reservation(s): {leaked_active}")
     if not newly_done:
         failures.append("no task reached done during the observed ticks")
+    if seeded_task and seeded_task not in final_done:
+        failures.append(f"seeded canary task {seeded_task} did not reach done")
     if final_git["status"]:
         failures.append(f"worktree left dirty:\n{final_git['status']}")
     failures.extend(f"bad work log: {item}" for item in bad_logs)
