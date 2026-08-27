@@ -297,6 +297,10 @@ def test_session_injects_memory_and_captures_a_skill(tmp_path) -> None:
     captured = [s for s in kb.skills.load_all() if s.source_task == task.id]
     assert len(captured) == 1
     assert captured[0].procedure  # a real method, synthesised from the transcript
+    learned_writes = [
+        entry.tool for entry in store.audit_log() if entry.tool.startswith("skill.")
+    ]
+    assert "skill.edit" in learned_writes and "skill.create" in learned_writes
 
 
 def test_session_without_knowledge_is_unchanged(tmp_path) -> None:

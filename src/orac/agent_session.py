@@ -203,10 +203,19 @@ class AgentSession:
             return
         try:
             for skill in self._injected_skills:
-                self.knowledge.skills.record_use(skill)
+                self.knowledge.record_use(
+                    skill,
+                    broker=self.broker,
+                    task=task,
+                    agent=self.profile.name,
+                )
             if result.status == "done":
                 captured = self.knowledge.capture_from_session(
-                    task, self.transcript, summary=result.summary
+                    task,
+                    self.transcript,
+                    summary=result.summary,
+                    broker=self.broker,
+                    agent=self.profile.name,
                 )
                 if captured is not None:
                     task.add_log(

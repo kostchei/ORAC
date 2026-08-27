@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 from orac.models import Task
 
 
-# Measured foundation spend (TODO: replace the $0.05/cycle estimate). Only models
+# Measured foundation spend (the former $0.05/cycle estimate is gone). Only models
 # listed here accrue cost; anything else — every local LM Studio model — is free
 # and accrues nothing, so local volume never touches the budget. Prices are USD
 # per 1M tokens (input, output), approximate published rates mid-2026; keep current

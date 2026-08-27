@@ -151,7 +151,7 @@ A pre-authorised action still dispatches *and* lands in the review queue (you se
 
 Doer sessions start fresh by design, so on their own they re-learn the repo's
 conventions and re-derive the same method every run. The knowledge layer carries
-that forward — a Hermes-inspired (Nous Research) persistent **memory** plus a
+that forward — a Hermes-inspired (Nous Research) operator-curated **memory** plus a
 self-improving **skills** library, kept as plain Markdown under `.orac/` and
 injected into a session's prompt at the start of a run. It is fully offline and
 deterministic; no new dependencies.
@@ -160,6 +160,7 @@ deterministic; no new dependencies.
 orac memory show                                   # the snapshot injected at session start
 orac memory add "Tests run with pytest from the repo root"
 orac memory add --target user "Operator prefers concise replies"
+orac memory replace "Tests run with pytest" "Run pytest from the repo root"
 orac memory remove "Tests run with pytest from the repo root"
 
 orac skills list                                   # skills captured from experience
@@ -169,7 +170,8 @@ orac skills show <name-or-slug>
 When a doer finishes `done` after five or more tool calls, ORAC synthesises a
 reusable `SKILL.md` from the session's own transcript (the working tool sequence
 becomes the procedure; denied/errored steps become pitfalls), patching an
-existing skill of the same name rather than duplicating it. Matched skills
+existing skill of the same name rather than duplicating it. These automatic
+skill writes use the brokered, snapshot-first skill adapters. Matched skills
 injected into a successful run have their use count bumped, so proven skills rank
 higher next time. See [docs/knowledge.md](docs/knowledge.md).
 

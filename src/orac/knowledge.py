@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
-from orac.models import Task, now_iso
+from orac.models import CapabilityRequest, CapabilityStatus, Task, now_iso
+
+if TYPE_CHECKING:
+    from orac.broker import ToolBroker
 
 # A Hermes-inspired knowledge layer: persistent memory plus self-improving
 # skills, both stored as plain Markdown on disk under .orac/. Nothing here is a
@@ -106,7 +112,17 @@ class MemoryStore:
 
     def _write(self, target: str, text: str) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._path(target).write_text(text.strip() + "\n" if text.strip() else "", encoding="utf-8")
+        path = self._path(target)
+        temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        payload = text.strip() + "\n" if text.strip() else ""
+        try:
+            with temp.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def add(self, target: str, entry: str) -> MemoryWriteResult:
         entry = entry.strip()
@@ -304,11 +320,26 @@ class SkillLibrary:
     def __init__(self, root: Path | str = ".") -> None:
         self.dir = Path(root) / ".orac" / "skills"
 
-    def load_all(self) -> list[Skill]:
+    def _paths(self) -> list[Path]:
+        """Live skills in the brokered ``<slug>/SKILL.md`` format.
+
+        Flat ``*.md`` files from the first knowledge prototype remain readable
+        for migration, but every new save uses the agentskills-compatible
+        directory shape already governed by ``skills_adapters.py``.
+        """
         if not self.dir.exists():
             return []
+        paths = [
+            path
+            for path in self.dir.rglob("SKILL.md")
+            if ".history" not in path.parts and ".archive" not in path.parts
+        ]
+        paths.extend(self.dir.glob("*.md"))
+        return sorted(set(paths), key=lambda path: path.as_posix())
+
+    def load_all(self) -> list[Skill]:
         skills: list[Skill] = []
-        for path in sorted(self.dir.glob("*.md")):
+        for path in self._paths():
             try:
                 skills.append(Skill.from_markdown(path.read_text(encoding="utf-8")))
             except Exception:  # noqa: BLE001 — a malformed skill must not break a run
@@ -316,14 +347,32 @@ class SkillLibrary:
         return skills
 
     def get(self, name: str) -> Skill | None:
-        path = self.dir / f"{_slugify(name)}.md"
-        if not path.exists():
-            return None
-        return Skill.from_markdown(path.read_text(encoding="utf-8"))
+        wanted = _slugify(name)
+        for path in self._paths():
+            try:
+                skill = Skill.from_markdown(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001 - malformed skills are isolated
+                continue
+            if skill.slug == wanted or path.parent.name == wanted:
+                return skill
+        return None
+
+    def read_markdown(self, name: str) -> str | None:
+        """Return the exact portable artifact; CLI display must not normalize it."""
+        wanted = _slugify(name)
+        for path in self._paths():
+            try:
+                raw = path.read_text(encoding="utf-8")
+                skill = Skill.from_markdown(raw)
+            except Exception:  # noqa: BLE001 - malformed skills are isolated
+                continue
+            if skill.slug == wanted or path.parent.name == wanted:
+                return raw
+        return None
 
     def save(self, skill: Skill) -> Path:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path = self.dir / f"{skill.slug}.md"
+        path = self.dir / skill.slug / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(skill.to_markdown(), encoding="utf-8")
         return path
 
@@ -384,18 +433,7 @@ class SkillLibrary:
         Re-learning a skill bumps its minor version and refreshes the procedure
         rather than spawning a duplicate — Hermes's 'skills are patched during
         use when outdated, incomplete, or wrong' applied to capture time."""
-        existing = self.get(name)
-        if existing is not None:
-            existing.description = description or existing.description
-            existing.when_to_use = when_to_use or existing.when_to_use
-            existing.procedure = procedure or existing.procedure
-            existing.pitfalls = sorted(set(existing.pitfalls) | set(pitfalls))
-            existing.tags = sorted(set(existing.tags) | set(tags))
-            existing.version = _bump_minor(existing.version)
-            existing.updated_at = now_iso()
-            self.save(existing)
-            return existing
-        skill = Skill(
+        skill, _ = self.prepare_capture(
             name=name,
             description=description,
             when_to_use=when_to_use,
@@ -406,6 +444,39 @@ class SkillLibrary:
         )
         self.save(skill)
         return skill
+
+    def prepare_capture(
+        self,
+        *,
+        name: str,
+        description: str,
+        when_to_use: str,
+        procedure: list[str],
+        pitfalls: list[str],
+        tags: list[str],
+        source_task: str,
+    ) -> tuple[Skill, bool]:
+        """Return the merged skill without writing; bool says it already existed."""
+        existing = self.get(name)
+        if existing is not None:
+            existing.description = description or existing.description
+            existing.when_to_use = when_to_use or existing.when_to_use
+            existing.procedure = procedure or existing.procedure
+            existing.pitfalls = sorted(set(existing.pitfalls) | set(pitfalls))
+            existing.tags = sorted(set(existing.tags) | set(tags))
+            existing.version = _bump_minor(existing.version)
+            existing.updated_at = now_iso()
+            return existing, True
+        skill = Skill(
+            name=name,
+            description=description,
+            when_to_use=when_to_use,
+            procedure=procedure,
+            pitfalls=pitfalls,
+            tags=tags,
+            source_task=source_task,
+        )
+        return skill, False
 
 
 def _bump_minor(version: str) -> str:
@@ -520,13 +591,19 @@ class KnowledgeBase:
         return ("\n\n".join(blocks), matched)
 
     def capture_from_session(
-        self, task: Task, transcript: list[str], *, summary: str = ""
+        self,
+        task: Task,
+        transcript: list[str],
+        *,
+        summary: str = "",
+        broker: "ToolBroker | None" = None,
+        agent: str = "Builder",
     ) -> Skill | None:
-        """Capture a skill from a finished session if it earned one."""
+        """Capture a skill if earned, using the governed adapter when available."""
         skill = synthesise_skill(task, transcript, summary=summary)
         if skill is None:
             return None
-        return self.skills.capture(
+        prepared, existed = self.skills.prepare_capture(
             name=skill.name,
             description=skill.description,
             when_to_use=skill.when_to_use,
@@ -535,3 +612,45 @@ class KnowledgeBase:
             tags=skill.tags,
             source_task=skill.source_task,
         )
+        if broker is None:
+            self.skills.save(prepared)
+            return prepared
+        tool = "skill.edit" if existed else "skill.create"
+        args = (
+            {"name": prepared.name, "content": prepared.to_markdown()}
+            if existed
+            else {"name": prepared.slug, "content": prepared.to_markdown(), "category": ""}
+        )
+        result = broker.request(
+            CapabilityRequest(agent=agent, tool=tool, task_id=task.id, args=args),
+            task,
+        )
+        return prepared if result.status is CapabilityStatus.ALLOWED else None
+
+    def record_use(
+        self,
+        skill: Skill,
+        *,
+        broker: "ToolBroker | None" = None,
+        task: Task | None = None,
+        agent: str = "Builder",
+    ) -> bool:
+        """Increment proof-of-use, brokered and snapshot-first in live sessions."""
+        current = self.skills.get(skill.name) or skill
+        current.uses += 1
+        current.updated_at = now_iso()
+        if broker is None:
+            self.skills.save(current)
+            return True
+        if task is None:
+            raise ValueError("A task is required for governed skill-use recording.")
+        result = broker.request(
+            CapabilityRequest(
+                agent=agent,
+                tool="skill.edit",
+                task_id=task.id,
+                args={"name": current.name, "content": current.to_markdown()},
+            ),
+            task,
+        )
+        return result.status is CapabilityStatus.ALLOWED

@@ -171,7 +171,7 @@ def make_parser() -> argparse.ArgumentParser:
     )
 
     memory = subparsers.add_parser(
-        "memory", help="Persistent cross-session memory the agents curate (MEMORY.md / USER.md)."
+        "memory", help="Operator-curated cross-session memory (MEMORY.md / USER.md)."
     )
     memory_sub = memory.add_subparsers(dest="memory_command", required=True)
     memory_sub.add_parser("show", help="Print the memory snapshot injected at session start.")
@@ -180,6 +180,14 @@ def make_parser() -> argparse.ArgumentParser:
     mem_add.add_argument(
         "--target", choices=list(MemoryStore.TARGETS), default="memory",
         help="'memory' = environment/workflow facts; 'user' = operator identity/preferences.",
+    )
+    mem_replace = memory_sub.add_parser(
+        "replace", help="Replace exact text in a memory file."
+    )
+    mem_replace.add_argument("old_text", help="Existing exact text to replace.")
+    mem_replace.add_argument("new_text", help="Replacement text.")
+    mem_replace.add_argument(
+        "--target", choices=list(MemoryStore.TARGETS), default="memory",
     )
     mem_remove = memory_sub.add_parser("remove", help="Remove matching text from a memory file.")
     mem_remove.add_argument("text", help="Substring to remove.")
@@ -666,6 +674,14 @@ def cmd_memory_remove(store: BoardStore, args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_memory_replace(store: BoardStore, args: argparse.Namespace) -> int:
+    result = MemoryStore(store.root).replace(
+        args.target, args.old_text, args.new_text
+    )
+    print(result.message)
+    return 0 if result.ok else 1
+
+
 def cmd_skills_list(store: BoardStore) -> int:
     skills = KnowledgeBase(store.root).skills.load_all()
     if not skills:
@@ -679,11 +695,11 @@ def cmd_skills_list(store: BoardStore) -> int:
 
 
 def cmd_skills_show(store: BoardStore, args: argparse.Namespace) -> int:
-    skill = KnowledgeBase(store.root).skills.get(args.name)
-    if skill is None:
+    markdown = KnowledgeBase(store.root).skills.read_markdown(args.name)
+    if markdown is None:
         print(f"No skill named {args.name!r}. Try `orac skills list`.")
         return 1
-    print(skill.to_markdown())
+    print(markdown, end="" if markdown.endswith("\n") else "\n")
     return 0
 
 
@@ -1269,6 +1285,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_memory_show(store)
     if args.command == "memory" and args.memory_command == "add":
         return cmd_memory_add(store, args)
+    if args.command == "memory" and args.memory_command == "replace":
+        return cmd_memory_replace(store, args)
     if args.command == "memory" and args.memory_command == "remove":
         return cmd_memory_remove(store, args)
     if args.command == "skills" and args.skills_command == "list":

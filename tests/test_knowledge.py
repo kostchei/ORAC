@@ -57,6 +57,7 @@ def test_memory_replace_and_remove(tmp_path: Path) -> None:
     assert not mem.replace("memory", "absent", "x").ok
     assert mem.remove("memory", "Build with uv").ok
     assert mem.read("memory") == ""
+    assert not list((tmp_path / ".orac" / "memory").glob("*.tmp"))
 
 
 def test_memory_unknown_target_raises(tmp_path: Path) -> None:
@@ -70,6 +71,25 @@ def test_memory_render_orders_user_then_memory(tmp_path: Path) -> None:
     mem.add("user", "operator name is Ada")
     rendered = mem.render_for_prompt()
     assert rendered.index("OPERATOR") < rendered.index("EARLIER SESSIONS")
+
+
+def test_memory_replace_cli_is_wired(tmp_path: Path, capsys) -> None:
+    from orac.cli import main
+
+    assert main(["--root", str(tmp_path), "memory", "add", "run tests with pytest"]) == 0
+    assert main(
+        [
+            "--root",
+            str(tmp_path),
+            "memory",
+            "replace",
+            "pytest",
+            "pytest -q",
+        ]
+    ) == 0
+
+    assert "pytest -q" in MemoryStore(tmp_path).read("memory")
+    assert "Replaced text" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +138,7 @@ def test_library_save_and_get(tmp_path: Path) -> None:
     got = lib.get("code: run tests")  # slug match, case-insensitive
     assert got is not None
     assert got.description == "how to run the suite"
+    assert lib.read_markdown("code: run tests") == got.to_markdown()
 
 
 def test_library_match_ranks_by_keyword_overlap(tmp_path: Path) -> None:
@@ -161,7 +182,7 @@ def test_capture_patches_existing_skill_and_bumps_version(tmp_path: Path) -> Non
     assert second.procedure == ["a", "b"]
     assert set(second.pitfalls) == {"p1", "p2"}  # pitfalls accumulate
     # Only one file on disk — patched, not duplicated.
-    assert len(list((tmp_path / ".orac" / "skills").glob("*.md"))) == 1
+    assert len(list((tmp_path / ".orac" / "skills").rglob("SKILL.md"))) == 1
 
 
 # --------------------------------------------------------------------------- #

@@ -15,15 +15,16 @@ injected into a doer session's prompt at the start of a run.
 
 ## Persistent memory
 
-Two small, character-capped Markdown files the agents curate across sessions:
+Two small, character-capped Markdown files the operator curates across sessions:
 
 - `.orac/memory/MEMORY.md` (≤2200 chars) — environment facts, project
   conventions, tool quirks, and techniques that worked.
 - `.orac/memory/USER.md` (≤1375 chars) — who the operator is and how they like
   to work.
 
-There is no *read* action: the text is injected into the session prompt as a
-frozen snapshot at session start. Writes are `add` / `replace` / `remove`. When
+There is no model-selected *read* action: the text is injected into the session
+prompt as a frozen snapshot at session start. Operator writes are atomic
+`add` / `replace` / `remove` CLI operations. When
 a file is full, the write is refused and the current entries are returned so they
 can be consolidated rather than silently truncated (the Hermes capacity contract).
 
@@ -31,13 +32,15 @@ can be consolidated rather than silently truncated (the Hermes capacity contract
 orac memory show
 orac memory add "Tests run with pytest from the repo root"
 orac memory add --target user "Operator prefers concise, plain replies"
+orac memory replace "Tests run with pytest" "Run pytest from the repo root"
 orac memory remove "Tests run with pytest from the repo root"
 ```
 
 ## Skills
 
-A skill is a portable `SKILL.md` file — frontmatter plus human-readable sections
-(`When to use`, `Procedure`, `Pitfalls`) — stored under `.orac/skills/`. Skills
+A skill is a portable `<slug>/SKILL.md` file — frontmatter plus human-readable
+sections (`When to use`, `Procedure`, `Pitfalls`) — stored under `.orac/skills/`.
+Skills
 are matched to a task by keyword overlap and the most relevant few are injected
 into the session prompt, so a doer starts with the method an earlier session
 already found.
@@ -59,7 +62,9 @@ synthesises a skill from the session's own transcript:
 - the task's goal and work kind become the trigger and tags.
 
 This is deterministic — the agent writing from its own experience, with no
-speculative second model call. Re-learning a skill of the same name **patches**
+speculative second model call. Live-session skill writes go back through the
+broker and the snapshot-first skill adapters; they do not bypass the audit or
+reversibility boundary. Re-learning a skill of the same name **patches**
 it (refreshes the procedure, accumulates pitfalls, bumps the minor version)
 rather than creating a duplicate. Matched skills that were injected into a
 successful run have their use count incremented, so proven skills rank higher.
