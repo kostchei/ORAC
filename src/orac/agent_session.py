@@ -36,21 +36,24 @@ DEFAULT_MAX_STEPS = 16
 DECISION_SCHEMA: dict = {
     "type": "object",
     "properties": {
+        "kind": {"type": "string", "enum": ["tool", "done", "blocked"]},
         "tool": {"type": "string"},
         "args": {"type": "object"},
-        "done": {"type": "boolean"},
         "summary": {"type": "string"},
-        "blocked": {"type": "boolean"},
         "reason": {"type": "string"},
     },
+    # LM Studio's grammar backend is most reliable with a flat object whose
+    # fields are all required; union/anyOf schemas can degrade into non-object
+    # output on some local models. Empty non-applicable strings are intentional.
+    "required": ["kind", "tool", "args", "summary", "reason"],
     "additionalProperties": False,
 }
 
 PROTOCOL = """\
 RESPONSE PROTOCOL — reply with a single JSON object and nothing else:
-  {"tool": "<tool name>", "args": {...}}   to use one of your tools
-  {"done": true, "summary": "<what you produced and how it was verified>"}
-  {"blocked": true, "reason": "<what stops you>"}
+  {"kind":"tool","tool":"<tool name>","args":{...},"summary":"","reason":""}
+  {"kind":"done","tool":"","args":{},"summary":"<work + verification>","reason":""}
+  {"kind":"blocked","tool":"","args":{},"summary":"","reason":"<what stops you>"}
 Use one tool per reply. Tool results appear as OBSERVATION lines. If a tool is
 denied or fails, adapt; do not repeat the identical call. Investigation is
 bounded: after search identifies candidate files, read one and act; do not spend
@@ -103,24 +106,24 @@ class AgentSession:
                     self._prompt(task, contract, step),
                 )
             decision = parse_decision(reply)
-            if decision is None:
+            if decision is None or not _is_session_decision(decision):
                 return self._finish(
                     task,
                     SessionResult(
                         status="blocked",
-                        summary=f"Unparseable model reply at step {step}: {reply[:200]!r}",
+                        summary=f"Invalid structured model reply at step {step}: {reply[:200]!r}",
                         steps=step,
                     ),
                 )
 
-            if decision.get("done"):
+            if decision.get("kind") == "done" or decision.get("done") is True:
                 return self._finish(
                     task,
                     SessionResult(
                         status="done", summary=str(decision.get("summary", "")), steps=step
                     ),
                 )
-            if decision.get("blocked"):
+            if decision.get("kind") == "blocked" or decision.get("blocked") is True:
                 return self._finish(
                     task,
                     SessionResult(
@@ -313,3 +316,23 @@ def parse_decision(reply: str) -> dict[str, Any] | None:
     if not isinstance(decision, dict):
         return None
     return decision
+
+
+def _is_session_decision(decision: dict[str, Any]) -> bool:
+    """True only for one actionable protocol shape, even without schema support."""
+    kind = decision.get("kind")
+    if kind == "done":
+        return isinstance(decision.get("summary"), str) and bool(decision["summary"])
+    if kind == "blocked":
+        return isinstance(decision.get("reason"), str) and bool(decision["reason"])
+    if kind == "tool":
+        return isinstance(decision.get("tool"), str) and bool(decision["tool"]) and isinstance(
+            decision.get("args"), dict
+        )
+    if decision.get("done") is True:
+        return isinstance(decision.get("summary"), str)
+    if decision.get("blocked") is True:
+        return isinstance(decision.get("reason"), str)
+    return isinstance(decision.get("tool"), str) and bool(decision["tool"]) and isinstance(
+        decision.get("args"), dict
+    )

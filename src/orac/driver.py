@@ -59,6 +59,11 @@ blocked task — only do that to flag genuinely needed non-code work)
 SYSTEM TELEMETRY:
 {telemetry}
 
+The `unacked_review_queue` count is operator workload already surfaced by the
+review cockpit. It is not evidence of a code defect. Never propose changing the
+review summary solely because this count is non-zero; the operator must ack or
+rollback those entries.
+
 Reply with a single JSON object and nothing else:
 {{"goal": "<one concrete achievable goal>",
   "work_kind": "<one of the kinds above>",

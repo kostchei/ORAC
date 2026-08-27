@@ -152,21 +152,11 @@ def scan_entropy(
             )
         )
 
-    unacked = len(store.list_notifications(unacked_only=True))
-    if unacked:
-        findings.append(
-            EntropyFinding(
-                category="governance",
-                key="unacked-review-queue",
-                observation=f"Observed {unacked} unacknowledged review notification(s).",
-                goal="Improve the operator summary for the accumulated review queue",
-                acceptance_criteria=(
-                    "the exact unacknowledged count is surfaced",
-                    "the advisory remains non-blocking",
-                    "tests pass",
-                ),
-            )
-        )
+    # An unacknowledged review is operator work, not code entropy. The notify,
+    # status, UI, and chat surfaces already report its exact count and provide
+    # ack/rollback actions. Turning a non-empty queue into a self-improvement
+    # goal recursively creates redundant "improve the summary" builds while the
+    # real action remains simply for the operator to review it.
 
     free_ratio = _sqlite_free_ratio(repo_root / ".orac" / "broker.db")
     if free_ratio is not None and free_ratio >= SQLITE_FREE_RATIO_THRESHOLD:

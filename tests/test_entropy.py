@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from orac.broker_store import BrokerStore
 from orac.entropy import collect_idle_garbage, scan_entropy
-from orac.models import Board, Task
+from orac.models import Board, CapabilityRequest, CapabilityResult, CapabilityStatus, Task
 
 
 def test_scan_entropy_reports_observed_orphan_and_oversized_log(tmp_path) -> None:
@@ -29,3 +29,19 @@ def test_idle_gc_retires_expired_runtime_lease(tmp_path) -> None:
     assert result.stale_subagents_reaped == 1
     assert store.list_subagents()[0].id == lease_id
     assert store.list_subagents()[0].status == "retired"
+
+
+def test_unacked_review_is_operator_work_not_code_entropy(tmp_path) -> None:
+    store = BrokerStore(tmp_path).init()
+    store.record_notification(
+        CapabilityRequest(agent="Builder", tool="git.push", task_id="t"),
+        CapabilityResult(
+            status=CapabilityStatus.ALLOWED,
+            tool="git.push",
+            message="Pushed a reviewed change.",
+        ),
+    )
+
+    findings = scan_entropy(Board(), store, tmp_path)
+
+    assert "unacked-review-queue" not in {finding.key for finding in findings}

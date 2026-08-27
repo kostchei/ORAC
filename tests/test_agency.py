@@ -151,7 +151,22 @@ def test_session_unparseable_reply_blocks_without_crashing(tmp_path) -> None:
     )
 
     assert result.status == "blocked"
-    assert "Unparseable" in result.summary
+    assert "Invalid structured" in result.summary
+
+
+def test_session_rejects_non_actionable_false_done_shape(tmp_path) -> None:
+    broker, _ = _setup(tmp_path)
+    brain = ScriptedBrain(
+        [json.dumps({"done": False, "reason": "I might search again later"})]
+    )
+    task = Task(title="false done", status=TaskStatus.IN_PROGRESS)
+
+    result = AgentSession(profile=_builder_profile(), brain=brain, broker=broker).run(
+        task, contract="GOAL: anything."
+    )
+
+    assert result.status == "blocked"
+    assert "Invalid structured" in result.summary
 
 
 def test_parse_decision_tolerates_fences_only() -> None:
