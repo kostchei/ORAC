@@ -120,6 +120,7 @@ class OpenAICompatibleBrain:
     api_key: str | None = None
     timeout_seconds: int = 60
     max_tokens: int | None = None
+    reasoning_effort: str | None = None
 
     def think(self, agent_name: str, role: str, task: Task, prompt: str) -> str:
         return self._complete(self._messages(agent_name, role, task, prompt))
@@ -159,6 +160,8 @@ class OpenAICompatibleBrain:
         payload: dict = {"model": self.model, "messages": messages, "temperature": 0.2}
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         if response_format is not None:
             payload["response_format"] = response_format
         headers = {"Content-Type": "application/json"}
@@ -184,9 +187,14 @@ class OpenAICompatibleBrain:
         choices = data.get("choices", [])
         if not choices:
             return ""
-        message = choices[0].get("message", {})
+        choice = choices[0]
+        message = choice.get("message", {})
         content = str(message.get("content") or "").strip()
         if not content:
+            if choice.get("finish_reason") == "length":
+                raise RuntimeError(
+                    "OpenAI-compatible model exhausted max_tokens before producing final content."
+                )
             # Reasoning models (e.g. qwen3) under strict structured output place
             # the schema-constrained answer in reasoning_content and leave
             # content empty. Read it rather than return "" — an empty reply

@@ -80,7 +80,7 @@ def test_lmstudio_reads_reasoning_content_when_content_is_empty(monkeypatch) -> 
     assert out == '{"tool":"git.status","args":{}}'
 
 
-def test_openai_compatible_brain_sends_max_tokens_when_set(monkeypatch) -> None:
+def test_openai_compatible_brain_sends_generation_bounds_when_set(monkeypatch) -> None:
     import orac.llm as llm
 
     captured = {}
@@ -96,12 +96,41 @@ def test_openai_compatible_brain_sends_max_tokens_when_set(monkeypatch) -> None:
 
     monkeypatch.setattr(llm, "urlopen", fake_urlopen)
 
-    out = llm.LMStudioBrain(max_tokens=123).think(
+    out = llm.LMStudioBrain(max_tokens=123, reasoning_effort="none").think(
         "Builder", "builder", Task(title="x"), "go"
     )
 
     assert out == "ok"
     assert captured["max_tokens"] == 123
+    assert captured["reasoning_effort"] == "none"
+
+
+def test_openai_compatible_brain_rejects_truncated_reasoning(monkeypatch) -> None:
+    import pytest
+    import orac.llm as llm
+
+    class _FakeResp:
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": "", "reasoning_content": "unfinished"},
+                        }
+                    ]
+                }
+            ).encode()
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(llm, "urlopen", lambda req, timeout=0: _FakeResp())
+
+    with pytest.raises(RuntimeError, match="exhausted max_tokens"):
+        llm.LMStudioBrain(max_tokens=1).think(
+            "Builder", "builder", Task(title="x"), "go"
+        )
 
 
 def test_model_for_work_kind_uses_slots() -> None:
@@ -153,6 +182,9 @@ def test_lens_brain_uses_small_slot_with_structured_output(tmp_path) -> None:
 
     assert isinstance(brain, LMStudioBrain)  # raw, no RulesBrain fallback
     assert brain.model == "llama-3.2-3b"
+    assert brain.timeout_seconds == 120
+    assert brain.max_tokens == 256
+    assert brain.reasoning_effort == "none"
     assert callable(getattr(brain, "think_json", None))  # lenses need structured output
 
 

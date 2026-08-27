@@ -135,6 +135,11 @@ category starts until item 4 has produced real evidence.
    `python scripts/soak_validate.py 3` for a small observed run. Promote to an overnight daemon
    only after the canary completes verified work without malformed model replies, step-budget
    exhaustion, leaked roster reservations, or unexpected review-queue entries.
+   **2026-08-28 attempt:** model-slot verification passed and live lens evaluation scored 16/16
+   decisive cases. The three-tick soak exposed a stranded build: no task reached `done` and the
+   checkout moved to `build/unack-review-count`. The harness now fails on no verified completion,
+   requires a clean starting tree, and reports Git drift. Fix that build path before promoting the
+   canary or running overnight.
 
 ---
 
@@ -196,6 +201,10 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
       Reads and drafts are brokered local actions; sends are external and approval-gated. A
       credential is required at dispatch time and missing credentials fail closed.
 - [ ] **Group 3 — Media.** Job queue, not blocking calls; ComfyUI; `review → publish`.
+      Its non-git rollback boundary is specified in
+      [compensating-actions.md](compensating-actions.md): local artifacts archive
+      reversibly, while publish requires a provider-backed inverse or remains
+      approval-first.
 - [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; e-stop; cooldowns;
       Home Assistant / MQTT first. Approval by default.
 - [ ] **Group 5 — Human Events.** Sessions epic that *consumes* the broker (a workflow layer on

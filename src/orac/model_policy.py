@@ -252,6 +252,17 @@ def lens_brain(policy_store: "ModelPolicyStore") -> Any:
     brain = LMStudioBrain()
     if model:
         brain.model = model
+    # Schema-constrained local models can spend most of the generic 60-second
+    # request window loading grammar state before producing their short answer.
+    # Keep lens calls bounded, but give them a realistic cold-call window and
+    # cap generation so a rambling model cannot turn governance into an
+    # unbounded wait.
+    brain.timeout_seconds = 120
+    brain.max_tokens = 256
+    # The council needs a tiny schema verdict, not a long chain of thought.
+    # LM Studio's reasoning models otherwise consume the entire output budget in
+    # reasoning_content and never emit the final JSON object.
+    brain.reasoning_effort = "none"
     return brain
 
 

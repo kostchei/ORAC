@@ -114,6 +114,9 @@ python scripts\soak_validate.py 3
 
 The canary should complete verified work without malformed model replies,
 step-budget exhaustion, stale subagent reservations, or unexpected review items.
+The harness requires a clean Git worktree, snapshots pre-existing queue and
+roster state, reports each tick's model, duration, and Git drift, and exits
+non-zero unless new verified work completes without a newly detected failure.
 
 ## Review queue (review-after, not ask-before)
 

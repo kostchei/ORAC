@@ -19,6 +19,14 @@ the code-writing and communications surfaces already present.
   run `python scripts/soak_validate.py 3`. Record whether each tick completes
   verified work without malformed structured replies, step-budget exhaustion,
   leaked roster reservations, or unexpected review-queue entries.
+  **Attempt 2026-08-28:** all three configured slots were loadable and the live
+  lens scorecard scored 16/16 decisive cases with a healthy 1-pass/2-stop
+  borderline split. Three ticks ran without new queue entries, malformed logs,
+  or leaked reservations, but no task reached `done` and the Builder left the
+  checkout on `build/unack-review-count`. That is not a passing end-to-end
+  canary. The harness now requires a clean starting tree, records Git drift, and
+  fails when no new verified work completes; rerun after fixing the stranded
+  build path.
 
 ## Safety and Verification
 
@@ -38,11 +46,14 @@ the code-writing and communications surfaces already present.
 
 ## Rollback and External Actions
 
-- [ ] **Define rollback beyond git.** The current rollback story is strong for
+- [x] **Define rollback beyond git.** The current rollback story is strong for
   code actions that record a commit sha, but future communications and physical
-  actions have no inverse commit. Keep fail-closed manual undo, but design
-  per-tool compensating actions, audit requirements, and operator prompts before
-  adding non-git mutating surfaces.
+  actions have no inverse commit. [docs/compensating-actions.md](docs/compensating-actions.md)
+  defines the versioned per-tool contract, stale-state and expiry checks, audit
+  requirements, operator prompts, and the explicit no-inverse posture that keeps
+  messages and unsupported physical/financial actions approval-first. The
+  resolver will land with the first Media adapter so the contract is exercised
+  by a real non-git tool rather than unused framework code.
 
 ## Budgeting
 
