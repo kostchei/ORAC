@@ -206,14 +206,14 @@ def test_work_kind_registry_covers_all_five_categories() -> None:
 def test_non_code_kind_without_doer_blocks_visibly(tmp_path) -> None:
     broker, _ = _setup(tmp_path)
     board = Board()
-    parent = Task(title="make an image", status=TaskStatus.IN_PROGRESS)
+    parent = Task(title="toggle a relay", status=TaskStatus.IN_PROGRESS)
     board.add_task(parent)
 
     child = run_goal_task(
         board, parent,
-        goal="generate a promo image",
-        acceptance_criteria=("an image exists",),
-        work_kind="media",  # Producer (Group 3) not built yet: still no doer
+        goal="toggle smart plug relay",
+        acceptance_criteria=("relay state is ON",),
+        work_kind="physical",  # Operator (Group 4) not built yet: still no doer
         brain=ScriptedBrain([]),  # must never be consulted: no doer exists
         broker=broker, context={},
     )

@@ -342,6 +342,119 @@ def _make_handler(
                 runtime.stop()
                 self._send_json(runtime.status())
                 return
+            if self.path == "/api/reviews/approve":
+                payload = self._read_json()
+                bstore = BrokerStore(store.root).init()
+                try:
+                    pending_id = int(payload.get("id", 0))
+                    bstore.resolve_pending(pending_id, "approved")
+                    pending = bstore.get_pending(pending_id)
+                    from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus  # noqa: PLC0415
+
+                    bstore.record_audit(
+                        CapabilityRequest(
+                            agent="human",
+                            tool="queue.approved",
+                            task_id=pending.task_id,
+                            args={"id": pending_id},
+                        ),
+                        CapabilityResult(
+                            status=CapabilityStatus.ALLOWED,
+                            tool="queue.approved",
+                            message=f"Approved pending {pending_id}",
+                        ),
+                    )
+                    self._send_json({
+                        "ok": True,
+                        "status": "approved",
+                        "id": pending_id,
+                        "reviews": _reviews_payload(store),
+                    })
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            if self.path == "/api/reviews/deny":
+                payload = self._read_json()
+                bstore = BrokerStore(store.root).init()
+                try:
+                    pending_id = int(payload.get("id", 0))
+                    bstore.resolve_pending(pending_id, "denied")
+                    pending = bstore.get_pending(pending_id)
+                    from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus  # noqa: PLC0415
+
+                    bstore.record_audit(
+                        CapabilityRequest(
+                            agent="human",
+                            tool="queue.denied",
+                            task_id=pending.task_id,
+                            args={"id": pending_id},
+                        ),
+                        CapabilityResult(
+                            status=CapabilityStatus.ALLOWED,
+                            tool="queue.denied",
+                            message=f"Denied pending {pending_id}",
+                        ),
+                    )
+                    self._send_json({
+                        "ok": True,
+                        "status": "denied",
+                        "id": pending_id,
+                        "reviews": _reviews_payload(store),
+                    })
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            if self.path == "/api/reviews/ack":
+                payload = self._read_json()
+                bstore = BrokerStore(store.root).init()
+                try:
+                    note_id = int(payload.get("id", 0))
+                    bstore.ack_notification(note_id)
+                    note = bstore.get_notification(note_id)
+                    from orac.models import CapabilityRequest, CapabilityResult, CapabilityStatus  # noqa: PLC0415
+
+                    bstore.record_audit(
+                        CapabilityRequest(
+                            agent="human",
+                            tool="queue.ack",
+                            task_id=note.task_id,
+                            args={"id": note_id},
+                        ),
+                        CapabilityResult(
+                            status=CapabilityStatus.ALLOWED,
+                            tool="queue.ack",
+                            message=f"Acked notification {note_id}",
+                        ),
+                    )
+                    self._send_json({
+                        "ok": True,
+                        "id": note_id,
+                        "reviews": _reviews_payload(store),
+                    })
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            if self.path == "/api/reviews/rollback":
+                payload = self._read_json()
+                try:
+                    note_id = int(payload.get("id", 0))
+                    push = bool(payload.get("push", False))
+                    from orac.compensating import execute_rollback  # noqa: PLC0415
+
+                    res = execute_rollback(store, note_id, push=push)
+                    self._send_json(
+                        {
+                            "ok": res.ok,
+                            "message": res.message,
+                            "tool": res.tool,
+                            "data": res.data or {},
+                            "reviews": _reviews_payload(store),
+                        },
+                        status=200 if res.ok else 400,
+                    )
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
             self.send_error(404)
 
         def log_message(self, format: str, *args: Any) -> None:
@@ -397,6 +510,11 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
     board = store.load()
     registry = TaskRegistry(board)
     decision = ModelPolicyStore(store).decide()
+    merge_conflicts = [
+        task.metadata["merge_conflict"]
+        for task in board.tasks
+        if isinstance(task.metadata.get("merge_conflict"), dict)
+    ]
     return {
         "stats": asdict(registry.stats()),
         "tasks": [task.to_dict() for task in board.tasks],
@@ -415,6 +533,7 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         "operator_advisory": operator_advisory_summary(
             BrokerStore(store.root).init(), store.root
         ).to_dict(),
+        "merge_conflicts": merge_conflicts,
     }
 
 
@@ -425,11 +544,19 @@ def _chat_payload(store: BoardStore, chat_runtime: ChatProcessRuntime) -> dict[s
 
 
 def _reviews_payload(store: BoardStore) -> dict[str, Any]:
-    """The full review queue for the UI cockpit (read-only mirror of the CLI)."""
+    """The full review queue for the UI cockpit."""
     bstore = BrokerStore(store.root).init()
+    board = store.load()
+    merge_conflicts = [
+        task.metadata["merge_conflict"]
+        for task in board.tasks
+        if isinstance(task.metadata.get("merge_conflict"), dict)
+    ]
     return {
         "summary": review_queue_summary(bstore).to_dict(),
         "pending_approvals": [asdict(p) for p in bstore.list_pending()],
         "notifications": [asdict(n) for n in bstore.list_notifications(unacked_only=True)],
         "standing_grants": [asdict(g) for g in bstore.list_standing_grants()],
+        "recent_verdicts": bstore.list_reviews(limit=10),
+        "merge_conflicts": merge_conflicts,
     }

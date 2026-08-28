@@ -870,57 +870,13 @@ def _rollback_request(
 
 
 def cmd_rollback(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.compensating import execute_rollback  # noqa: PLC0415
+
     bstore = BrokerStore(store.root).init()
-    try:
-        note = bstore.get_notification(args.id)
-    except KeyError as exc:
-        print(str(exc))
+    res = execute_rollback(store, args.id, push=getattr(args, "push", False))
+    print(res.message)
+    if not res.ok:
         return 1
-    sha = note.data.get("sha")
-    if not sha:
-        print(
-            f"Notification [{note.id}] ({note.tool}) has no recorded commit sha; "
-            "nothing to revert automatically. Revert manually, then `orac ack`."
-        )
-        return 1
-    root = str(note.data.get("root") or store.root.resolve())
-    adapters = code_adapters_for((root,))
-
-    req = _rollback_request(note, root, "git.revert", {"root": root, "sha": sha})
-    result = adapters["git.revert"](req)
-    bstore.record_audit(
-        req,
-        CapabilityResult(
-            status=CapabilityStatus.ALLOWED,
-            tool=result.name,
-            message=result.message,
-            data=result.data,
-        ),
-    )
-    print(result.message)
-
-    if args.push:
-        remote = note.data.get("remote", "origin")
-        push_args: dict[str, object] = {"root": root, "remote": remote}
-        branch = note.data.get("branch")
-        if branch:
-            push_args["branch"] = branch
-        push_req = _rollback_request(note, root, "git.push", push_args)
-        push_result = adapters["git.push"](push_req)
-        bstore.record_audit(
-            push_req,
-            CapabilityResult(
-                status=CapabilityStatus.ALLOWED,
-                tool=push_result.name,
-                message=push_result.message,
-                data=push_result.data,
-            ),
-        )
-        print(push_result.message)
-
-    if not note.acked:
-        bstore.ack_notification(note.id)
-    print(f"Rolled back and acked [{note.id}] {note.agent} {note.tool}.")
     adv = reservoir_advisory(bstore)
     if adv:
         print(adv)

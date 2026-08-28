@@ -251,6 +251,48 @@
       "description": "Send a message to a target on slack or whatsapp. Irreversible external action.",
       "regular_use": "Messenger sends a message; parks for human approval before it executes (no undo).",
       "inputs": ["task_id", "channel", "target", "text"]
+    },
+    {
+      "name": "comfy.workflow_list",
+      "description": "List available ComfyUI workflow templates and required parameters.",
+      "regular_use": "Producer inspects available image generation workflows.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "comfy.generate_image",
+      "description": "Submit an image generation job to ComfyUI; returns a queued media job id without blocking.",
+      "regular_use": "Producer queues generation jobs asynchronously.",
+      "inputs": ["task_id", "workflow", "prompt", "params"]
+    },
+    {
+      "name": "comfy.queue_status",
+      "description": "Check the status and progress of a queued or executing ComfyUI media job.",
+      "regular_use": "Producer monitors asynchronous generation progress.",
+      "inputs": ["task_id", "job_id"]
+    },
+    {
+      "name": "comfy.fetch_artifact",
+      "description": "Retrieve completed media job artifact and register it in the asset store in 'generated' state.",
+      "regular_use": "Producer collects generated images and attaches compensation contracts.",
+      "inputs": ["task_id", "job_id", "name"]
+    },
+    {
+      "name": "media.review_asset",
+      "description": "Record review outcome and notes for a generated asset, transitioning it to 'reviewed' state.",
+      "regular_use": "Producer marks an asset as inspected and accepted.",
+      "inputs": ["task_id", "asset_id", "notes"]
+    },
+    {
+      "name": "media.publish_asset",
+      "description": "Publish an approved media asset to an export destination or external endpoint. Approval-gated.",
+      "regular_use": "Producer publishes approved media assets.",
+      "inputs": ["task_id", "asset_id", "destination"]
+    },
+    {
+      "name": "media.archive_asset",
+      "description": "Archive a media asset in the asset store. Used for rollback and cleanup.",
+      "regular_use": "Producer sets aside or rolls back an asset.",
+      "inputs": ["task_id", "asset_id"]
     }
   ]
 }

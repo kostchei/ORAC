@@ -201,15 +201,38 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
       `channel.read` / `channel.draft` / `channel.send`, backed by Slack and WhatsApp adapters.
       Reads and drafts are brokered local actions; sends are external and approval-gated. A
       credential is required at dispatch time and missing credentials fail closed.
-- [ ] **Group 3 — Media.** Job queue, not blocking calls; ComfyUI; `review → publish`.
-      Its non-git rollback boundary is specified in
-      [compensating-actions.md](compensating-actions.md): local artifacts archive
-      reversibly, while publish requires a provider-backed inverse or remains
-      approval-first.
-- [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; e-stop; cooldowns;
-      Home Assistant / MQTT first. Approval by default.
-- [ ] **Group 5 — Human Events.** Sessions epic that *consumes* the broker (a workflow layer on
-      top, not bundled into it).
+
+### Immediate build order (agreed 2026-08-28)
+
+0. [x] **Finish the review cockpit.** `/api/reviews` ([ui_server.py](../src/orac/ui_server.py)) and the
+   UI are read-only today; `approve` / `deny` / `ack` / `rollback` exist only as CLI commands
+   ([cli.py](../src/orac/cli.py) `cmd_approve` / `cmd_ack` / `cmd_rollback`). Add matching
+   `POST /api/reviews/*` handlers and browser actions so the cockpit is a full surface, not a
+   read-only mirror. Also surface a same-task merge conflict to the operator instead of silently
+   keeping the newest version (the last open item under [TODO.md](../TODO.md) State Durability).
+- [x] **Group 3 — Media.** Job queue, not blocking calls; ComfyUI; `review → publish`.
+      1. Persistent asynchronous media-job queue (`src/orac/media_store.py`).
+      2. Asset/artifact store with lifecycle states (generated → reviewed → archived/published).
+      3. ComfyUI adapter: workflow listing, generation, queue status, artifact retrieval
+         (`comfy.workflow_list` / `comfy.generate_image` / `comfy.queue_status` /
+         `comfy.fetch_artifact`, per [tool-categories.md](tool-categories.md) §3 in `src/orac/media_adapters.py`).
+      4. `generate → review → archive/publish` workflow, mapped onto the existing council/pending
+         machinery.
+      5. Producer agent (`doer_slug="producer"` for `media`) with tightly scoped grants in
+         `src/orac/prompts/agents.json` and `src/orac/prompts/producer.md`.
+      6. Verification, cost estimation, and policy/risk classification for the new tools.
+      7. Provider-backed rollback for publishing where the provider supports it; approval-first
+         when no inverse exists. Generic resolver implemented in `src/orac/compensating.py` per
+         [compensating-actions.md](compensating-actions.md).
+- [ ] **Operational durability (parallel/after Media).** Board event-log rotation/compaction;
+      better conflict and stale-roster visibility; optional Windows notifications for
+      approval/review items; longer unattended soak runs and outcome-based tuning.
+- [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; explicit device
+      allowlists, cooldowns, rate limits, captured pre-state; e-stop; Home Assistant / MQTT first.
+      Approval by default.
+- [ ] **Group 5 — Human Events.** A workflow layer *above* the broker — sessions, participants,
+      rounds, timers, human-input waits, resume/broadcast, closure — kept separate from the broker
+      itself, not bundled into it.
 
 ---
 

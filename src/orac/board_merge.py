@@ -60,11 +60,23 @@ def merge_boards(base: Board, ours: Board, theirs: Board) -> BoardMerge:
                 and ours_task.to_dict() != theirs_task.to_dict()
             ):
                 conflicts.append(task_id)
-                decided[task_id] = (
+                winner = (
                     ours_task
                     if ours_task.updated_at >= theirs_task.updated_at
                     else theirs_task
                 )
+                winner.metadata["merge_conflict"] = {
+                    "task_id": task_id,
+                    "resolved_at": max(ours_task.updated_at, theirs_task.updated_at),
+                    "resolution": "newest_wins",
+                    "note": "Concurrent task edit merged (newest update retained)",
+                }
+                winner.add_log(
+                    "storage",
+                    "Merge conflict: concurrent edits merged; newest update retained.",
+                    kind="system",
+                )
+                decided[task_id] = winner
             elif ours_changed:
                 decided[task_id] = ours_task
             else:
@@ -77,6 +89,17 @@ def merge_boards(base: Board, ours: Board, theirs: Board) -> BoardMerge:
             elif _changed(ours_task, task_id, base_by_id):
                 # modify/delete race: keep the modification rather than lose work.
                 conflicts.append(task_id)
+                ours_task.metadata["merge_conflict"] = {
+                    "task_id": task_id,
+                    "resolved_at": ours_task.updated_at,
+                    "resolution": "kept_modification",
+                    "note": "Modify/delete conflict: retained modification.",
+                }
+                ours_task.add_log(
+                    "storage",
+                    "Merge conflict: modify/delete race; retained modification.",
+                    kind="system",
+                )
                 decided[task_id] = ours_task
             else:
                 decided[task_id] = None  # they deleted it, we did not touch it
@@ -86,6 +109,17 @@ def merge_boards(base: Board, ours: Board, theirs: Board) -> BoardMerge:
                 decided[task_id] = theirs_task  # they added it
             elif _changed(theirs_task, task_id, base_by_id):
                 conflicts.append(task_id)
+                theirs_task.metadata["merge_conflict"] = {
+                    "task_id": task_id,
+                    "resolved_at": theirs_task.updated_at,
+                    "resolution": "kept_modification",
+                    "note": "Modify/delete conflict: retained modification.",
+                }
+                theirs_task.add_log(
+                    "storage",
+                    "Merge conflict: modify/delete race; retained modification.",
+                    kind="system",
+                )
                 decided[task_id] = theirs_task
             else:
                 decided[task_id] = None  # we deleted it, they did not touch it

@@ -87,6 +87,15 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "channel.read": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "channel.draft": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "channel.send": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PRIVATE),
+    # Media (Group 3). Generation, status, artifact retrieval, and review are local/reversible
+    # with a compensating archive contract; publishing is external public and requires approval.
+    "comfy.workflow_list": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "comfy.generate_image": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "comfy.queue_status": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "comfy.fetch_artifact": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "media.review_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "media.archive_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "media.publish_asset": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PUBLIC),
 }
 
 

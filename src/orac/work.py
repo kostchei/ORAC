@@ -105,9 +105,10 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
     ),
     "media": WorkKindSpec(
         kind="media",
-        doer_slug=None,  # Producer: job-queue media generation (Group 3)
+        doer_slug="producer",  # Producer: job-queue media generation (Group 3)
         done_means="an artifact exists in the asset store awaiting review; publish is gated.",
         contract_rules="- Queue jobs; never block. Publish requires approval.",
+        verifiers=("verify_media_artifact",),
     ),
     "physical": WorkKindSpec(
         kind="physical",
@@ -856,6 +857,32 @@ def _verify_comms_sent(
     return False, "no sent message or recorded draft for this comms subtask"
 
 
+def _verify_media_artifact(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Confirm a media subtask reached its done-means via the media store or audit log.
+
+    Done is an artifact existing in the asset store (or media generation audit).
+    """
+    root = context.get("repo_root") or (broker.store.root if broker.store else ".")
+    from orac.media_store import MediaStore  # noqa: PLC0415
+
+    mstore = MediaStore(root)
+    assets = mstore.list_assets(task_id=child.id)
+    if assets:
+        latest = assets[0]
+        return True, f"media artifact [{latest.id}] in asset store (state: {latest.review_state})"
+    if broker.store is not None:
+        if broker.store.audit_count("Producer", "comfy.fetch_artifact", child.id) > 0:
+            return True, "artifact fetched and registered"
+        if broker.store.audit_count("Producer", "comfy.generate_image", child.id) > 0:
+            return True, "media job queued"
+    return False, "no media artifact registered in asset store for this task"
+
+
 # Verifier name -> how it confirms a kind's done-means. The check runs through
 # the broker (audited, no privileged path) as the doer agent. Defined after the
 # helpers so the registry binds real callables at import time.
@@ -863,6 +890,7 @@ _VERIFIERS = {
     "run_tests": _verify_run_tests,
     "verify_local_app": _verify_local_app,
     "verify_comms_sent": _verify_comms_sent,
+    "verify_media_artifact": _verify_media_artifact,
 }
 
 

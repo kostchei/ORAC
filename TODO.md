@@ -4,6 +4,29 @@ High-signal follow-up items from the current appraisal. These are operational
 verification, safety, and durability gaps to close before ORAC widens beyond
 the code-writing and communications surfaces already present.
 
+## Next Up (agreed build order, 2026-08-28)
+
+- [x] **Review cockpit actions.** `/api/reviews` and the UI are read-only; add
+  browser actions for approve, deny, acknowledge, and rollback so the cockpit
+  matches the CLI (`orac approve` / `deny` / `ack` / `rollback` in `cli.py`).
+  Also surface a same-task merge conflict to the operator instead of silently
+  keeping the newest version (see State Durability below).
+- [x] **Group 3 — Media foundation.** Persistent async media-job queue;
+  asset/artifact store with lifecycle states; ComfyUI adapter (workflow
+  listing, generation, queue status, artifact retrieval); a
+  `generate → review → archive/publish` workflow; a Producer agent with
+  tightly scoped grants; verification, cost estimation, and risk
+  classification for the new tools; provider-backed rollback for publishing
+  (approval-first when no inverse exists — the first real implementation of
+  `docs/compensating-actions.md`). See `docs/roadmap.md` for the detailed
+  sequence.
+- [ ] **Operational durability polish.** Board event-log rotation/compaction;
+  clearer conflict and stale-roster visibility; optional Windows
+  notifications for approval/review items; longer unattended soaks with
+  outcome-based tuning.
+- [ ] **Group 4 — Physical**, then **Group 5 — Human Events**, per
+  `docs/roadmap.md`.
+
 ## Immediate Operational Readiness
 
 - [x] **Reconcile persisted board state with implemented work.** The current

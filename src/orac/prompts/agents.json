@@ -65,6 +65,16 @@
       "protocol_file": "messenger_max.json",
       "tools": ["channel.read", "channel.draft", "channel.send", "skill.list", "skill.view"],
       "order": 70
+    },
+    {
+      "slug": "producer",
+      "name": "Producer",
+      "kind": "doer",
+      "purpose": "The only agent that generates and manages media assets. Queues jobs, reviews artifacts, and publishes assets via ComfyUI and the media store; publish is human-approved.",
+      "prompt_file": "producer.md",
+      "protocol_file": "producer_max.json",
+      "tools": ["comfy.workflow_list", "comfy.generate_image", "comfy.queue_status", "comfy.fetch_artifact", "media.review_asset", "media.publish_asset", "media.archive_asset", "skill.list", "skill.view"],
+      "order": 80
     }
   ]
 }

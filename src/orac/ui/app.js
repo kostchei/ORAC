@@ -107,10 +107,11 @@ function renderTaskCard(task) {
   const kind = task.work_kind ? ` · ${task.work_kind}` : "";
   const assignee = task.assignee || "unassigned";
   const message = log ? `${log.agent}: ${log.message}` : nextActionFor(task);
+  const conflictBadge = task.metadata?.merge_conflict ? `<span class="badge-conflict">Conflict Merged</span> ` : "";
   return `
     <article class="task">
       <div class="task-title">
-        <strong>${html(task.title)}</strong>
+        <strong>${conflictBadge}${html(task.title)}</strong>
         <span class="status-${html(task.status)}">${html(task.status)}</span>
       </div>
       <div class="task-meta">${html(task.id)} · ${html(task.points)} point(s) · ${html(assignee)}${html(kind)}</div>
@@ -205,6 +206,16 @@ function renderAttention(state, loopStatus) {
       meta: "System resources",
       message: `Only ${state.resources.disk_free_gb} GB of disk space remaining.`,
     });
+  }
+  if (state.merge_conflicts && state.merge_conflicts.length > 0) {
+    for (const c of state.merge_conflicts) {
+      items.push({
+        type: "error",
+        title: `Merge conflict on task ${c.task_id}`,
+        meta: "State Durability",
+        message: `${c.note || "Concurrent edits resolved (newest update retained)"} at ${formatTime(c.resolved_at)}`,
+      });
+    }
   }
 
   document.querySelector("#attention-count").textContent = String(items.length);
@@ -449,11 +460,129 @@ function renderTimeline(events) {
     .join("");
 }
 
+async function renderReviews(reviews) {
+  const pendingContainer = document.querySelector("#pending-approvals-list");
+  const notesContainer = document.querySelector("#notifications-list");
+  const conflictsContainer = document.querySelector("#merge-conflicts-list");
+
+  if (!pendingContainer || !notesContainer) return;
+
+  const pending = reviews.pending_approvals || [];
+  if (!pending.length) {
+    pendingContainer.innerHTML = `<p class="empty-state">No pending approvals.</p>`;
+  } else {
+    pendingContainer.innerHTML = `
+      <h3>Pending Approvals (${pending.length})</h3>
+      ${pending.map((p) => `
+        <article class="review-card is-pending">
+          <div class="review-card-head">
+            <span class="review-card-title">[${html(p.id)}] ${html(p.agent)} / ${html(p.tool)}</span>
+            <span class="review-card-meta">Task: ${html(p.task_id)} · ${html(formatTime(p.created_at))}</span>
+          </div>
+          <div class="review-card-message">Args: <code>${html(JSON.stringify(p.args || {}))}</code></div>
+          <div class="review-card-actions">
+            <button class="btn-approve" type="button" onclick="approveReview(${p.id})">Approve</button>
+            <button class="btn-deny" type="button" onclick="denyReview(${p.id})">Deny</button>
+          </div>
+        </article>
+      `).join("")}
+    `;
+  }
+
+  const notifications = reviews.notifications || [];
+  if (!notifications.length) {
+    notesContainer.innerHTML = `<p class="empty-state">No completed actions awaiting review.</p>`;
+  } else {
+    notesContainer.innerHTML = `
+      <h3>Actions Awaiting Review (${notifications.length})</h3>
+      ${notifications.map((n) => {
+        const canRollback = n.data?.rollback_contract || n.data?.sha;
+        const rollbackBtn = canRollback
+          ? `<button class="btn-rollback" type="button" onclick="rollbackReview(${n.id})">Rollback</button>`
+          : "";
+        return `
+        <article class="review-card is-notification">
+          <div class="review-card-head">
+            <span class="review-card-title">[${html(n.id)}] ${html(n.agent)} / ${html(n.tool)}</span>
+            <span class="review-card-meta">Task: ${html(n.task_id)} · ${html(formatTime(n.created_at))}</span>
+          </div>
+          <div class="review-card-message">${html(n.message)}</div>
+          <div class="review-card-actions">
+            <button class="btn-ack" type="button" onclick="ackReview(${n.id})">Acknowledge</button>
+            ${rollbackBtn}
+          </div>
+        </article>
+      `;}).join("")}
+    `;
+  }
+
+  const conflicts = reviews.merge_conflicts || [];
+  if (conflictsContainer) {
+    if (!conflicts.length) {
+      conflictsContainer.innerHTML = "";
+    } else {
+      conflictsContainer.innerHTML = `
+        <h3>Merge Conflicts (${conflicts.length})</h3>
+        ${conflicts.map((c) => `
+          <article class="review-card is-conflict">
+            <div class="review-card-head">
+              <span class="review-card-title">Task ${html(c.task_id)}: ${html(c.resolution)}</span>
+              <span class="review-card-meta">${html(formatTime(c.resolved_at))}</span>
+            </div>
+            <div class="review-card-message">${html(c.note || "Concurrent edits resolved automatically")}</div>
+          </article>
+        `).join("")}
+      `;
+    }
+  }
+}
+
+window.approveReview = async function(id) {
+  try {
+    await postJson("/api/reviews/approve", { id });
+    await refresh();
+  } catch (err) {
+    alert(`Failed to approve: ${err.message}`);
+  }
+};
+
+window.denyReview = async function(id) {
+  try {
+    await postJson("/api/reviews/deny", { id });
+    await refresh();
+  } catch (err) {
+    alert(`Failed to deny: ${err.message}`);
+  }
+};
+
+window.ackReview = async function(id) {
+  try {
+    await postJson("/api/reviews/ack", { id });
+    await refresh();
+  } catch (err) {
+    alert(`Failed to acknowledge: ${err.message}`);
+  }
+};
+
+window.rollbackReview = async function(id) {
+  if (!confirm(`Rollback notification #${id}? This will revert changes according to the compensation contract.`)) {
+    return;
+  }
+  try {
+    const res = await postJson("/api/reviews/rollback", { id, push: true });
+    alert(res.message || "Rollback completed.");
+    await refresh();
+  } catch (err) {
+    alert(`Rollback failed: ${err.message}`);
+  }
+};
+
 async function refresh() {
-  const [state, loopStatus, chat] = await Promise.all([
+  const [state, loopStatus, chat, reviews] = await Promise.all([
     api("/api/state"),
     api("/api/loop/status"),
     api("/api/chat"),
+    api("/api/reviews"),
   ]);
   window.oracLoadedModels = state.loaded_models || [];
   renderRunStatus(state, loopStatus);
@@ -463,6 +592,7 @@ async function refresh() {
   renderResources(state.resources);
   renderModelPolicy(state.model_policy);
   renderDecisions(state, loopStatus);
+  renderReviews(reviews);
   renderStats(state.stats);
   renderTasks(state.tasks);
   renderAudio(state.audio);
@@ -731,6 +861,13 @@ document.querySelector("#stop-loop").addEventListener("click", async () => {
   await postJson("/api/loop/stop", {});
   await refresh();
 });
+
+const refreshReviewsBtn = document.querySelector("#refresh-reviews");
+if (refreshReviewsBtn) {
+  refreshReviewsBtn.addEventListener("click", async () => {
+    await refresh();
+  });
+}
 
 function readSettingsForm() {
   return {

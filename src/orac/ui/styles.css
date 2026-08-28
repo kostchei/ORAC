@@ -1035,3 +1035,111 @@ label {
   display: flex;
   gap: 8px;
 }
+
+/* --- review cockpit & actions ----------------------------------------- */
+
+.review-cockpit-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.review-queue-container {
+  display: grid;
+  gap: 20px;
+}
+
+.review-list {
+  display: grid;
+  gap: 12px;
+}
+
+.review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.review-card.is-pending {
+  border-left: 4px solid var(--mustard);
+}
+
+.review-card.is-notification {
+  border-left: 4px solid var(--moss);
+}
+
+.review-card.is-conflict {
+  border-left: 4px solid var(--rose);
+  background: color-mix(in srgb, var(--rose) 8%, var(--card));
+}
+
+.review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-card-title {
+  font-weight: 600;
+  font-family: var(--serif);
+  font-size: 15px;
+}
+
+.review-card-meta {
+  font-size: 12px;
+  color: var(--stone);
+}
+
+.review-card-message {
+  font-size: 13px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.btn-approve {
+  background: var(--moss);
+  color: #ffffff;
+  border: none;
+}
+
+.btn-deny {
+  background: var(--rose);
+  color: #ffffff;
+  border: none;
+}
+
+.btn-ack {
+  background: var(--stone);
+  color: #ffffff;
+  border: none;
+}
+
+.btn-rollback {
+  background: var(--mustard);
+  color: #ffffff;
+  border: none;
+}
+
+.badge-conflict {
+  background: var(--rose);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+

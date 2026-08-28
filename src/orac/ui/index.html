@@ -97,6 +97,21 @@
         <div id="decisions" class="decisions"></div>
       </section>
 
+      <section class="panel review-cockpit-panel">
+        <div class="panel-head">
+          <div>
+            <span class="kicker">Review Cockpit</span>
+            <h2>Review Queue & Actions</h2>
+          </div>
+          <button id="refresh-reviews" class="secondary-button" type="button">Refresh Queue</button>
+        </div>
+        <div id="review-queue-container" class="review-queue-container">
+          <div id="pending-approvals-list" class="review-list"></div>
+          <div id="notifications-list" class="review-list"></div>
+          <div id="merge-conflicts-list" class="review-list"></div>
+        </div>
+      </section>
+
       <details id="add-request-drawer" class="panel drawer-panel">
         <summary>Add a base request</summary>
         <form id="request-form" class="request-panel">
