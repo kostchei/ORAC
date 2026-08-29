@@ -358,6 +358,90 @@ class BoardStore:
             self._save_atomic(self.backup_path, payload)
             return Board.from_dict(latest["board"])
 
+    @property
+    def events_archive_path(self) -> Path:
+        return self.state_dir / "board.events.archive.jsonl"
+
+    @property
+    def archive_path(self) -> Path:
+        return self.state_dir / "board.archive.json"
+
+    def compact_events(self, keep: int = 20, *, archive: bool = True) -> int:
+        """Compact board.events.jsonl by retaining the latest `keep` events.
+
+        If `archive` is True, older events are appended to board.events.archive.jsonl
+        prior to rewriting the active event log atomically.
+        Returns the number of events pruned/archived.
+        """
+        if keep < 1:
+            raise ValueError("keep must be at least 1")
+        with _BoardLock(self.lock_path):
+            events = self.read_events()
+            if len(events) <= keep:
+                return 0
+            to_archive = events[:-keep]
+            to_keep = events[-keep:]
+            if archive:
+                self.events_archive_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.events_archive_path, "a", encoding="utf-8") as f:
+                    for ev in to_archive:
+                        f.write(json.dumps(ev, sort_keys=True) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+            payload = "".join(json.dumps(ev, sort_keys=True) + "\n" for ev in to_keep)
+            self._save_atomic(self.events_path, payload)
+            return len(to_archive)
+
+    def prune_tasks(
+        self,
+        filter_fn: Callable[[Task], bool],
+        *,
+        archive: bool = True,
+        mark_superseded: bool = False,
+    ) -> list[Task]:
+        """Prune or mark tasks matching `filter_fn`.
+
+        If `mark_superseded` is True, matches are updated in place with
+        `metadata["superseded"] = True`.
+        If `mark_superseded` is False, matches are removed from `board.json` and,
+        if `archive` is True, appended to `board.archive.json`.
+        Returns the list of pruned/marked tasks.
+        """
+        def _mutation(board: Board) -> list[Task]:
+            matched: list[Task] = []
+            remaining: list[Task] = []
+            for task in board.tasks:
+                if filter_fn(task):
+                    matched.append(task)
+                    if mark_superseded:
+                        task.metadata["superseded"] = True
+                        task.updated_at = now_iso()
+                        remaining.append(task)
+                else:
+                    remaining.append(task)
+            if not mark_superseded:
+                board.tasks = remaining
+                if archive and matched:
+                    self._archive_tasks(matched)
+            return matched
+
+        return self.update(_mutation)
+
+    def _archive_tasks(self, tasks: list[Task]) -> None:
+        archived_data: list[dict[str, Any]] = []
+        if self.archive_path.exists():
+            try:
+                archived_data = json.loads(self.archive_path.read_text(encoding="utf-8"))
+            except Exception:
+                archived_data = []
+        archived_ids = {t.get("id") for t in archived_data if isinstance(t, dict)}
+        for t in tasks:
+            d = t.to_dict()
+            if d.get("id") not in archived_ids:
+                archived_data.append(d)
+        payload = json.dumps(archived_data, indent=2, sort_keys=True) + "\n"
+        self._save_atomic(self.archive_path, payload)
+
     def load_json(self, path: Path, default: dict[str, Any]) -> dict[str, Any]:
         if not path.exists():
             return dict(default)
@@ -366,3 +450,4 @@ class BoardStore:
     def save_json(self, path: Path, data: dict[str, Any]) -> None:
         payload = json.dumps(data, indent=2, sort_keys=True)
         self._save_atomic(path, payload + "\n")
+

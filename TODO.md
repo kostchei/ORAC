@@ -20,12 +20,17 @@ the code-writing and communications surfaces already present.
   (approval-first when no inverse exists — the first real implementation of
   `docs/compensating-actions.md`). See `docs/roadmap.md` for the detailed
   sequence.
-- [ ] **Operational durability polish.** Board event-log rotation/compaction;
-  clearer conflict and stale-roster visibility; optional Windows
-  notifications for approval/review items; longer unattended soaks with
-  outcome-based tuning.
-- [ ] **Group 4 — Physical**, then **Group 5 — Human Events**, per
-  `docs/roadmap.md`.
+- [x] **Operational durability polish.** Board event-log rotation/compaction (`orac board compact`);
+  board task pruning/reconciliation (`orac board prune`); active Windows
+  notifications for approval/review items (`orac.notify.send_windows_toast`);
+  reconciled board state and telemetry.
+- [x] **Group 5 — Human Events.** Workflow orchestration layer above the broker:
+  `EventsStore` (`.orac/events.db`), Host doer agent (`doer_slug="host"`),
+  session lifecycle and rounds (`event.create`, `event.advance_round`, `event.close`),
+  participant management (`event.add_participant`), human input waits and responses
+  (`event.ask_human`, `event.wait_for_response`), broadcasts (`event.broadcast_update`),
+  `verify_event_closed` verifier, and operator CLI (`orac event list/show/respond`).
+- [ ] **Group 4 — Physical**, per `docs/roadmap.md`.
 
 ## Immediate Operational Readiness
 

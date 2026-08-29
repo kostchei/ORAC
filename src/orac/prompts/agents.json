@@ -75,6 +75,16 @@
       "protocol_file": "producer_max.json",
       "tools": ["comfy.workflow_list", "comfy.generate_image", "comfy.queue_status", "comfy.fetch_artifact", "media.review_asset", "media.publish_asset", "media.archive_asset", "skill.list", "skill.view"],
       "order": 80
+    },
+    {
+      "slug": "host",
+      "name": "Host",
+      "kind": "doer",
+      "purpose": "The only agent that hosts human events, interactive sessions, workshops, rounds, and participant coordination. Organises rounds, asks humans questions, broadcasts updates, and closes completed sessions.",
+      "prompt_file": "host.md",
+      "protocol_file": "host_max.json",
+      "tools": ["event.create", "event.add_participant", "event.ask_human", "event.wait_for_response", "event.advance_round", "event.broadcast_update", "event.close", "skill.list", "skill.view"],
+      "order": 90
     }
   ]
 }

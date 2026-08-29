@@ -293,6 +293,48 @@
       "description": "Archive a media asset in the asset store. Used for rollback and cleanup.",
       "regular_use": "Producer sets aside or rolls back an asset.",
       "inputs": ["task_id", "asset_id"]
+    },
+    {
+      "name": "event.create",
+      "description": "Create and initialize a new human event session or interactive workflow.",
+      "regular_use": "Host sets up a session with total rounds and metadata.",
+      "inputs": ["task_id", "title", "total_rounds", "metadata"]
+    },
+    {
+      "name": "event.add_participant",
+      "description": "Add a human or agent participant to an active event session.",
+      "regular_use": "Host registers session participants and assigns roles.",
+      "inputs": ["task_id", "event_id", "name", "role", "channel"]
+    },
+    {
+      "name": "event.ask_human",
+      "description": "Submit a question or choice to a human participant; creates a human-input request.",
+      "regular_use": "Host solicits human feedback or decisions during a round.",
+      "inputs": ["task_id", "event_id", "question", "options", "timeout_seconds"]
+    },
+    {
+      "name": "event.wait_for_response",
+      "description": "Check status or retrieve the answer for a pending human-input request.",
+      "regular_use": "Host checks if a participant answered a question.",
+      "inputs": ["task_id", "request_id"]
+    },
+    {
+      "name": "event.advance_round",
+      "description": "Advance the session to the next round, archiving the completed round.",
+      "regular_use": "Host moves the event workflow into the next phase/round.",
+      "inputs": ["task_id", "event_id", "summary", "title", "prompt"]
+    },
+    {
+      "name": "event.broadcast_update",
+      "description": "Broadcast an announcement or state update to all participants in an event session.",
+      "regular_use": "Host sends updates or instructions across channels.",
+      "inputs": ["task_id", "event_id", "message", "channel"]
+    },
+    {
+      "name": "event.close",
+      "description": "Close and finalize an event session with a closing summary.",
+      "regular_use": "Host completes the session once all rounds are resolved.",
+      "inputs": ["task_id", "event_id", "summary"]
     }
   ]
 }

@@ -121,9 +121,14 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
     ),
     "event": WorkKindSpec(
         kind="event",
-        doer_slug=None,  # Host: human sessions/games/workshops (Group 5)
+        doer_slug="host",  # Host: human sessions/games/workshops (Group 5)
         done_means="the session reached its closing state with all rounds resolved.",
-        contract_rules="- Advance rounds only on human input; never answer for a participant.",
+        contract_rules=(
+            "- Initialize session and register participants before round 1.\n"
+            "- Solicit participant input using event.ask_human and wait_for_response.\n"
+            "- Advance rounds as milestones complete; close with a summary."
+        ),
+        verifiers=("verify_event_closed",),
     ),
 }
 
@@ -883,6 +888,31 @@ def _verify_media_artifact(
     return False, "no media artifact registered in asset store for this task"
 
 
+def _verify_event_closed(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Confirm an event subtask reached its done-means via the events store or audit log.
+
+    Done is an event session in 'completed' status or an audited event.close call.
+    """
+    root = context.get("repo_root") or (broker.store.root if broker.store else ".")
+    from orac.events_store import EventsStore  # noqa: PLC0415
+
+    estore = EventsStore(root)
+    events = estore.list_events(task_id=child.id)
+    if events:
+        latest = events[0]
+        if latest.status == "completed":
+            return True, f"event session [{latest.id}] '{latest.title}' reached completed status ({latest.current_round}/{latest.total_rounds} rounds)"
+        return False, f"event session [{latest.id}] is in '{latest.status}' state (not completed)"
+    if broker.store is not None and broker.store.audit_count("Host", "event.close", child.id) > 0:
+        return True, "event.close executed for this session"
+    return False, "no event session found or completed for this task"
+
+
 # Verifier name -> how it confirms a kind's done-means. The check runs through
 # the broker (audited, no privileged path) as the doer agent. Defined after the
 # helpers so the registry binds real callables at import time.
@@ -891,6 +921,7 @@ _VERIFIERS = {
     "verify_local_app": _verify_local_app,
     "verify_comms_sent": _verify_comms_sent,
     "verify_media_artifact": _verify_media_artifact,
+    "verify_event_closed": _verify_event_closed,
 }
 
 

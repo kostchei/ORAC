@@ -224,15 +224,16 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
       7. Provider-backed rollback for publishing where the provider supports it; approval-first
          when no inverse exists. Generic resolver implemented in `src/orac/compensating.py` per
          [compensating-actions.md](compensating-actions.md).
-- [ ] **Operational durability (parallel/after Media).** Board event-log rotation/compaction;
-      better conflict and stale-roster visibility; optional Windows notifications for
-      approval/review items; longer unattended soak runs and outcome-based tuning.
+- [x] **Operational durability (parallel/after Media).** Board event-log rotation/compaction (`orac board compact`);
+      board task pruning/reconciliation (`orac board prune`); active Windows toast notifications
+      for approval/review items; clean telemetry.
 - [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; explicit device
       allowlists, cooldowns, rate limits, captured pre-state; e-stop; Home Assistant / MQTT first.
       Approval by default.
-- [ ] **Group 5 — Human Events.** A workflow layer *above* the broker — sessions, participants,
+- [x] **Group 5 — Human Events.** A workflow layer *above* the broker — sessions, participants,
       rounds, timers, human-input waits, resume/broadcast, closure — kept separate from the broker
-      itself, not bundled into it.
+      itself, consuming it cleanly via `EventsStore`, `Host` agent (`doer_slug="host"`), and
+      `event.*` tools.
 
 ---
 

@@ -1,0 +1,15 @@
+{
+  "agent": "host",
+  "name": "Host",
+  "version": "1.0.0",
+  "description": "Interactive event host and session facilitator protocol.",
+  "protocol": {
+    "steps": [
+      "1. Initialize session with event.create and register participants with event.add_participant.",
+      "2. Coordinate rounds, ask participant input with event.ask_human when required.",
+      "3. Advance rounds with event.advance_round upon gathering input.",
+      "4. Broadcast progress with event.broadcast_update.",
+      "5. Complete session with event.close."
+    ]
+  }
+}

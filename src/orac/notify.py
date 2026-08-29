@@ -231,3 +231,78 @@ def operator_advisory_summary(
         ),
         latest_completion=latest,
     )
+
+
+def _build_powershell_toast_command(title: str, message: str, app_id: str = "ORAC") -> str:
+    safe_title = title.replace("'", "''").replace("\n", " ")
+    safe_msg = message.replace("'", "''").replace("\n", " ")
+    safe_app = app_id.replace("'", "''")
+    xml = (
+        f"<toast>"
+        f"<visual><binding template='ToastGeneric'>"
+        f"<text>{safe_title}</text>"
+        f"<text>{safe_msg}</text>"
+        f"</binding></visual>"
+        f"</toast>"
+    )
+    return (
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
+        f"$xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]::new(); "
+        f"$xml.LoadXml('{xml}'); "
+        f"$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+        f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{safe_app}').Show($toast);"
+    )
+
+
+def send_windows_toast(
+    title: str,
+    message: str,
+    *,
+    app_id: str = "ORAC",
+    async_spawn: bool = True,
+) -> bool:
+    """Send a native Windows desktop toast notification.
+
+    Non-blocking when async_spawn=True (default). Degrades gracefully and returns False
+    if on non-Windows platforms or if PowerShell / WinRT is unavailable.
+    """
+    import os
+    import subprocess
+    import threading
+
+    if os.name != "nt":
+        return False
+
+    def _execute() -> bool:
+        try:
+            ps_script = _build_powershell_toast_command(title, message, app_id)
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                capture_output=True,
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return True
+        except Exception:
+            return False
+
+    if async_spawn:
+        t = threading.Thread(target=_execute, daemon=True)
+        t.start()
+        return True
+    return _execute()
+
+
+def notify_review_queue(
+    store: BrokerStore,
+    *,
+    send_toast: bool = True,
+    app_id: str = "ORAC",
+) -> ReviewQueueSummary:
+    """Read review queue summary and optionally emit a Windows Toast if items require attention."""
+    summary = review_queue_summary(store)
+    if not summary.is_clear and send_toast:
+        title = "ORAC Review Queue"
+        send_windows_toast(title, summary.message(), app_id=app_id)
+    return summary
+

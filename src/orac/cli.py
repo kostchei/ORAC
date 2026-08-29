@@ -89,6 +89,30 @@ def make_parser() -> argparse.ArgumentParser:
     board_sub.add_parser(
         "rebuild", help="Rebuild board.json from the event log's latest snapshot."
     )
+    board_compact = board_sub.add_parser(
+        "compact", help="Compact board event log by retaining recent snapshots and archiving older ones."
+    )
+    board_compact.add_argument(
+        "--keep", type=int, default=20, help="Number of latest events to retain in active log (default: 20)."
+    )
+    board_compact.add_argument(
+        "--no-archive", action="store_true", help="Discard older events instead of appending to board.events.archive.jsonl."
+    )
+    board_prune = board_sub.add_parser(
+        "prune", help="Reconcile the board by archiving or marking superseded legacy blocked tasks."
+    )
+    board_prune.add_argument(
+        "--all-blocked", action="store_true", default=True, help="Prune tasks currently in blocked status (default: True)."
+    )
+    board_prune.add_argument(
+        "--superseded", action="store_true", help="Mark matched tasks as superseded in place instead of removing them from the board."
+    )
+    board_prune.add_argument(
+        "--no-archive", action="store_true", help="Do not save removed tasks to board.archive.json."
+    )
+    board_prune.add_argument(
+        "--dry-run", action="store_true", help="Print matching tasks without modifying the board."
+    )
 
     list_cmd = subparsers.add_parser("list", help="List tasks.")
     list_cmd.add_argument("--status", choices=[status.value for status in TaskStatus])
@@ -344,6 +368,26 @@ def make_parser() -> argparse.ArgumentParser:
     scrum_sub = scrum.add_subparsers(dest="scrum_command", required=True)
     run = scrum_sub.add_parser("run", help="Run the local agents.")
     run.add_argument("--cycles", type=int, default=1)
+
+    event = subparsers.add_parser("event", help="Human event and session workflow operations (Group 5).")
+    event_sub = event.add_subparsers(dest="event_command", required=True)
+    ev_list = event_sub.add_parser("list", help="List event sessions.")
+    ev_list.add_argument("--status", help="Filter by status (active, completed, waiting_human).")
+    ev_show = event_sub.add_parser("show", help="Show an event session and pending requests.")
+    ev_show.add_argument("id", help="Event session id.")
+    ev_respond = event_sub.add_parser("respond", help="Answer a pending human input request.")
+    ev_respond.add_argument("request_id", help="Human request id.")
+    ev_respond.add_argument("response", help="The answer or decision text.")
+    ev_broadcast = event_sub.add_parser("broadcast", help="Broadcast an announcement to an event session.")
+    ev_broadcast.add_argument("event_id", help="Event session id.")
+    ev_broadcast.add_argument("message", help="Message text.")
+    ev_broadcast.add_argument("--channel", default="all", help="Channel target (default: all).")
+    ev_advance = event_sub.add_parser("advance", help="Advance an event session to the next round.")
+    ev_advance.add_argument("event_id", help="Event session id.")
+    ev_advance.add_argument("--summary", default="", help="Summary of the completed round.")
+    ev_close = event_sub.add_parser("close", help="Close an event session.")
+    ev_close.add_argument("event_id", help="Event session id.")
+    ev_close.add_argument("--summary", default="", help="Closing summary.")
     run.add_argument(
         "--brain",
         choices=["auto", "rules", "ollama", "lmstudio", "foundation"],
@@ -441,6 +485,49 @@ def cmd_board_rebuild(store: BoardStore) -> int:
         f"({len(board.tasks)} task(s), revision {board.revision})."
     )
     return 0
+
+
+def cmd_board_compact(store: BoardStore, args: argparse.Namespace) -> int:
+    keep = getattr(args, "keep", 20)
+    archive = not getattr(args, "no_archive", False)
+    pruned = store.compact_events(keep=keep, archive=archive)
+    if pruned > 0:
+        arch_note = f"; archived into {store.events_archive_path}" if archive else ""
+        print(f"Compacted {store.events_path}: removed {pruned} older event(s){arch_note}, kept latest {keep}.")
+    else:
+        print(f"No compaction needed for {store.events_path} (fewer than or equal to {keep} events).")
+    return 0
+
+
+def cmd_board_prune(store: BoardStore, args: argparse.Namespace) -> int:
+    board = store.load()
+    all_blocked = getattr(args, "all_blocked", True)
+    superseded = getattr(args, "superseded", False)
+    archive = not getattr(args, "no_archive", False)
+    dry_run = getattr(args, "dry_run", False)
+
+    def _matches(task: Task) -> bool:
+        if all_blocked and task.status == TaskStatus.BLOCKED:
+            return True
+        return False
+
+    matching = [t for t in board.tasks if _matches(t)]
+    if not matching:
+        print("No matching tasks to prune.")
+        return 0
+
+    if dry_run:
+        print(f"[dry-run] Found {len(matching)} task(s) matching prune criteria:")
+        for t in matching:
+            print(f"  {t.id} [{t.status.value}] {t.title}")
+        return 0
+
+    pruned = store.prune_tasks(_matches, archive=archive, mark_superseded=superseded)
+    action = "marked as superseded" if superseded else "pruned"
+    arch_msg = f" (archived to {store.archive_path})" if archive and not superseded else ""
+    print(f"Successfully {action} {len(pruned)} task(s) from {store.board_path}{arch_msg}.")
+    return 0
+
 
 
 def cmd_registry_stats(store: BoardStore) -> int:
@@ -1132,6 +1219,103 @@ def cmd_scrum_run(store: BoardStore, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_event_list(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    events = estore.list_events(status=getattr(args, "status", None))
+    if not events:
+        print("No event sessions found.")
+        return 0
+    print(f"{len(events)} event session(s):")
+    for ev in events:
+        print(f"  [{ev.id}] '{ev.title}' — status: {ev.status}, round: {ev.current_round}/{ev.total_rounds}, created: {ev.created_at}")
+    return 0
+
+
+def cmd_event_show(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    try:
+        ev = estore.get_event(args.id)
+    except KeyError:
+        print(f"Event session [{args.id}] not found.")
+        return 1
+    participants = estore.list_participants(ev.id)
+    requests = estore.list_pending_human_requests(ev.id)
+    broadcasts = estore.list_broadcasts(ev.id)
+
+    print(f"Event Session [{ev.id}] '{ev.title}'")
+    print(f"  Status:        {ev.status}")
+    print(f"  Round:         {ev.current_round} of {ev.total_rounds}")
+    print(f"  Created:       {ev.created_at}")
+    print(f"  Updated:       {ev.updated_at}")
+    print(f"  Participants ({len(participants)}):")
+    for p in participants:
+        print(f"    - [{p.id}] {p.name} ({p.role}, channel: {p.channel})")
+    print(f"  Pending Human Requests ({len(requests)}):")
+    for r in requests:
+        opts = f" (options: {r.options})" if r.options else ""
+        print(f"    - [{r.id}] Question: {r.question}{opts}")
+    print(f"  Broadcasts ({len(broadcasts)}):")
+    for b in broadcasts:
+        print(f"    - [R{b.round_number}] ({b.channel}): {b.message}")
+    return 0
+
+
+def cmd_event_respond(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    try:
+        req = estore.respond_human(args.request_id, args.response)
+        print(f"Recorded answer for request [{req.id}]: '{req.response}' (status: {req.status}).")
+    except KeyError:
+        print(f"Human request [{args.request_id}] not found.")
+        return 1
+    return 0
+
+
+def cmd_event_broadcast(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    try:
+        b = estore.broadcast_message(args.event_id, args.message, channel=getattr(args, "channel", "all"))
+        print(f"Broadcasted to [{b.event_id}] on channel '{b.channel}': '{b.message}'")
+    except KeyError:
+        print(f"Event session [{args.event_id}] not found.")
+        return 1
+    return 0
+
+
+def cmd_event_advance(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    try:
+        ev = estore.advance_round(args.event_id, summary=getattr(args, "summary", ""))
+        print(f"Advanced event [{ev.id}] to round {ev.current_round}/{ev.total_rounds} (status: {ev.status}).")
+    except KeyError:
+        print(f"Event session [{args.event_id}] not found.")
+        return 1
+    return 0
+
+
+def cmd_event_close(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.events_store import EventsStore
+
+    estore = EventsStore(store.root)
+    try:
+        ev = estore.close_event(args.event_id, summary=getattr(args, "summary", ""))
+        print(f"Closed event session [{ev.id}] (status: {ev.status}).")
+    except KeyError:
+        print(f"Event session [{args.event_id}] not found.")
+        return 1
+    return 0
+
+
 def cmd_status(store: BoardStore) -> int:
     bstore = BrokerStore(store.root).init()
     policy_store = ModelPolicyStore(store)
@@ -1195,6 +1379,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_board_events(store, args)
     if args.command == "board" and args.board_command == "rebuild":
         return cmd_board_rebuild(store)
+    if args.command == "board" and args.board_command == "compact":
+        return cmd_board_compact(store, args)
+    if args.command == "board" and args.board_command == "prune":
+        return cmd_board_prune(store, args)
     if args.command == "registry" and args.registry_command == "stats":
         return cmd_registry_stats(store)
     if args.command == "registry" and args.registry_command == "base-request":
@@ -1289,6 +1477,18 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_sprint_plan(store, args)
     if args.command == "scrum" and args.scrum_command == "run":
         return cmd_scrum_run(store, args)
+    if args.command == "event" and args.event_command == "list":
+        return cmd_event_list(store, args)
+    if args.command == "event" and args.event_command == "show":
+        return cmd_event_show(store, args)
+    if args.command == "event" and args.event_command == "respond":
+        return cmd_event_respond(store, args)
+    if args.command == "event" and args.event_command == "broadcast":
+        return cmd_event_broadcast(store, args)
+    if args.command == "event" and args.event_command == "advance":
+        return cmd_event_advance(store, args)
+    if args.command == "event" and args.event_command == "close":
+        return cmd_event_close(store, args)
 
     parser.error("Unknown command.")
     return 2

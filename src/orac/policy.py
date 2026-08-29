@@ -96,6 +96,15 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "media.review_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "media.archive_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "media.publish_asset": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PUBLIC),
+    # Events / Human Sessions (Group 5). Session lifecycle, rounds, participant coordination,
+    # and human inquiries are local and reversible.
+    "event.create": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.add_participant": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.ask_human": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.wait_for_response": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.advance_round": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.broadcast_update": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "event.close": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
 }
 
 
