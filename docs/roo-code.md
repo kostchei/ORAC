@@ -10,6 +10,9 @@ serving it on port `1234` with automatic GPU offload for the 24 GB RTX 4090.
 Install or enable the recommended `RooVeterinaryInc.roo-cline` extension, then
 open Roo Code's provider settings and choose:
 
+The installed extension was verified on 2026-09-10 as version **3.54.0**, the
+latest Marketplace version available for this extension.
+
 | Setting | Value |
 | --- | --- |
 | API Provider | LM Studio |
