@@ -432,6 +432,15 @@ function renderSettings(settings) {
   document.querySelector("#setting-small-model").value = settings.lmstudio_small_model;
 }
 
+function renderLmstudioToken(status) {
+  const target = document.querySelector("#lmstudio-token-status");
+  if (!target) return;
+  const configured = Boolean(status?.configured);
+  target.textContent = configured ? "token configured" : "token not configured";
+  target.classList.toggle("svc-on", configured);
+  target.classList.toggle("svc-off", !configured);
+}
+
 function renderLoopStatusText(status) {
   const last = status.last_tick ? `Last tick touched ${tickTouchedCount(status.last_tick)} task(s).` : "No tick yet.";
   const state = status.stopping ? "Loop stopping." : status.running ? "Loop running." : "Loop stopped.";
@@ -597,6 +606,7 @@ async function refresh() {
   renderTasks(state.tasks);
   renderAudio(state.audio);
   renderSettings(state.settings);
+  renderLmstudioToken(state.lmstudio_token);
   renderTimeline(state.interactions);
   renderLoopStatusText(loopStatus);
   renderChat(chat);
@@ -688,6 +698,21 @@ document.querySelector("#close-settings-pane").addEventListener("click", closeSe
 document.querySelector("#settings-backdrop").addEventListener("click", closeSettingsPane);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeSettingsPane();
+});
+
+document.querySelector("#lmstudio-token-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = document.querySelector("#lmstudio-token-message");
+  try {
+    await postJson("/api/lmstudio/token", {
+      token: document.querySelector("#lmstudio-api-token").value,
+    });
+    document.querySelector("#lmstudio-api-token").value = "";
+    message.textContent = "Token saved securely. ORAC and Roo can now use LM Studio.";
+    await refresh();
+  } catch (error) {
+    message.textContent = error.message;
+  }
 });
 
 document.querySelector("#slack-connect-form").addEventListener("submit", async (event) => {

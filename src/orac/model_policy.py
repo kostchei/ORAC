@@ -11,6 +11,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from orac.credentials import lmstudio_api_token
 from orac.resources import ResourceSnapshot, read_resource_snapshot
 from orac.storage import BoardStore
 
@@ -29,7 +30,7 @@ DEFAULT_POLICY = {
     # Per-work-kind model slots (docs/model-selection.md). Empty = use standard.
     "lmstudio_code_model": "",
     "lmstudio_creative_model": "",
-    "lmstudio_identifier": "orac-local",
+    "lmstudio_identifier": "",
     "lmstudio_autoload_on_start": True,
     "daemon_interval_seconds": 60,
     "daemon_cycles": 1,
@@ -462,8 +463,11 @@ def lmstudio_load_model(model_key: str, identifier: str = "orac-local") -> tuple
     if shutil.which("lms") is None:
         return False, "LM Studio CLI `lms` was not found on PATH."
     try:
+        command = ["lms", "load", model_key, "--yes"]
+        if identifier:
+            command[2:2] = ["--identifier", identifier]
         completed = subprocess.run(
-            ["lms", "load", model_key, "--identifier", identifier, "--yes"],
+            command,
             capture_output=True,
             text=True,
             timeout=180,
@@ -627,7 +631,11 @@ def verify_model_slots(policy_store: "ModelPolicyStore") -> dict[str, Any]:
 
 
 def lmstudio_models(base_url: str = "http://localhost:1234/v1") -> list[str]:
-    request = Request(f"{base_url.rstrip('/')}/models", method="GET")
+    headers = {}
+    token = lmstudio_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(f"{base_url.rstrip('/')}/models", headers=headers, method="GET")
     try:
         with urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))

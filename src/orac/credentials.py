@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,9 @@ from typing import Any
 
 class CredentialError(RuntimeError):
     """Raised when a secret cannot be sealed or opened."""
+
+
+LMSTUDIO_API_TOKEN_REF = "model.lmstudio_api_token"
 
 
 # --- Windows DPAPI via ctypes (no third-party dependency) --------------------
@@ -147,3 +151,21 @@ class CredentialStore:
             if secret:
                 scrubbed = scrubbed.replace(secret, "***")
         return scrubbed
+
+
+def lmstudio_api_token(root: Path | str = ".") -> str | None:
+    """Return the LM Studio token from the environment or ORAC's vault.
+
+    Environment variables are useful for unattended runs; the UI stores the
+    token in the Windows DPAPI-backed credential store instead of config or
+    logs. ``ORAC_ROOT`` lets long-running services resolve the right project
+    when their process working directory is elsewhere.
+    """
+    token = os.environ.get("ORAC_LMSTUDIO_API_KEY") or os.environ.get("LM_API_TOKEN")
+    if token:
+        return token
+    vault_root = os.environ.get("ORAC_ROOT") or root
+    try:
+        return CredentialStore(vault_root).get(LMSTUDIO_API_TOKEN_REF)
+    except CredentialError:
+        return None

@@ -112,12 +112,13 @@ WORK_KINDS: dict[str, WorkKindSpec] = {
     ),
     "physical": WorkKindSpec(
         kind="physical",
-        doer_slug=None,  # Operator: sole holder of execute_action (Group 4)
+        doer_slug="operator",  # Operator: sole holder of execute_action (Group 4)
         done_means="the device state read back confirms the prepared action took effect.",
         contract_rules=(
             "- read_state, prepare_action, execute_action in that order.\n"
             "- Execution requires approval or a standing grant; honour cooldowns."
         ),
+        verifiers=("verify_physical_action",),
     ),
     "event": WorkKindSpec(
         kind="event",
@@ -913,6 +914,34 @@ def _verify_event_closed(
     return False, "no event session found or completed for this task"
 
 
+def _verify_physical_action(
+    spec: WorkKindSpec,
+    child: Task,
+    broker: ToolBroker,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Confirm a physical subtask reached its done-means via the physical store or audit log.
+
+    Done is an executed physical action (or e-stop) for the task id.
+    """
+    root = context.get("repo_root") or (broker.store.root if broker.store else ".")
+    from orac.physical_store import PhysicalStore  # noqa: PLC0415
+
+    pstore = PhysicalStore(root)
+    actions = pstore.list_actions(task_id=child.id)
+    if actions:
+        latest = actions[0]
+        if latest.action_type in ("execute", "emergency_stop"):
+            return True, f"physical action [{latest.id}] ({latest.action_type}) confirmed for device [{latest.device_id}]"
+        return False, f"physical action [{latest.id}] is in state {latest.action_type!r} (not executed)"
+    if broker.store is not None:
+        if broker.store.audit_count("Operator", "physical.execute_action", child.id) > 0:
+            return True, "physical.execute_action executed and audited"
+        if broker.store.audit_count("Operator", "physical.emergency_stop", child.id) > 0:
+            return True, "physical.emergency_stop executed and audited"
+    return False, "no executed physical action registered for this task"
+
+
 # Verifier name -> how it confirms a kind's done-means. The check runs through
 # the broker (audited, no privileged path) as the doer agent. Defined after the
 # helpers so the registry binds real callables at import time.
@@ -922,6 +951,7 @@ _VERIFIERS = {
     "verify_comms_sent": _verify_comms_sent,
     "verify_media_artifact": _verify_media_artifact,
     "verify_event_closed": _verify_event_closed,
+    "verify_physical_action": _verify_physical_action,
 }
 
 

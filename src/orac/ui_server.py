@@ -28,6 +28,7 @@ from orac.chat_signon import (
     prepare_whatsapp,
 )
 from orac.dependency_installer import install_audio_stack
+from orac.credentials import CredentialError, CredentialStore, LMSTUDIO_API_TOKEN_REF
 from orac.llm import build_brain, drain_foundation_spend_usd
 from orac.model_policy import (
     ModelPolicyStore,
@@ -47,6 +48,11 @@ from orac.task_registry import TaskRegistry
 def run_ui(root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) -> None:
     store = BoardStore(root)
     store.init()
+    # Model clients can resolve the same vault entry even when the UI was
+    # launched from a parent directory or by a desktop shortcut.
+    import os
+
+    os.environ["ORAC_ROOT"] = str(store.root.resolve())
     policy_store = ModelPolicyStore(store)
     runtime = UIRuntime(store)
     chat_runtime = ChatProcessRuntime(store)
@@ -181,6 +187,11 @@ def _make_handler(
             if path == "/api/models/loaded":
                 self._send_json({"models": lmstudio_loaded_models()})
                 return
+            if path == "/api/lmstudio/token-status":
+                self._send_json({
+                    "configured": CredentialStore(store.root).has(LMSTUDIO_API_TOKEN_REF),
+                })
+                return
             if path == "/api/browser/status":
                 policy = ModelPolicyStore(store).load_policy()
                 cdp_url = str(policy.get("browser_cdp_url", "http://localhost:9222"))
@@ -263,6 +274,22 @@ def _make_handler(
                 current.update(payload)
                 policy_store.save_policy(current)
                 self._send_json(policy_store.load_policy())
+                return
+            if self.path == "/api/lmstudio/token":
+                payload = self._read_json()
+                token = str(payload.get("token", "")).strip()
+                if not token:
+                    self._send_json({"ok": False, "message": "Paste a non-empty LM Studio token."}, status=400)
+                    return
+                try:
+                    CredentialStore(store.root).set(LMSTUDIO_API_TOKEN_REF, token)
+                except CredentialError as exc:
+                    self._send_json({"ok": False, "message": str(exc)}, status=500)
+                    return
+                import os
+
+                os.environ["ORAC_LMSTUDIO_API_KEY"] = token
+                self._send_json({"ok": True, "configured": True})
                 return
             if self.path == "/api/chat/slack/connect":
                 payload = self._read_json()
@@ -522,6 +549,9 @@ def _state_payload(store: BoardStore) -> dict[str, Any]:
         "resources": decision.resources.to_dict(),
         "model_policy": decision.to_dict(),
         "loaded_models": lmstudio_loaded_models(),
+        "lmstudio_token": {
+            "configured": CredentialStore(store.root).has(LMSTUDIO_API_TOKEN_REF),
+        },
         "settings": ModelPolicyStore(store).load_policy(),
         # Hardware enumeration is quarantined behind /api/audio/devices; core
         # state polling reports only cheap capability flags and never runs

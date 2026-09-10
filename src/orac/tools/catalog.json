@@ -335,6 +335,36 @@
       "description": "Close and finalize an event session with a closing summary.",
       "regular_use": "Host completes the session once all rounds are resolved.",
       "inputs": ["task_id", "event_id", "summary"]
+    },
+    {
+      "name": "physical.list_entities",
+      "description": "List allowlisted physical devices, entities, backend information, and current state.",
+      "regular_use": "Operator inspects available physical actuators and their cooldown/state status.",
+      "inputs": ["task_id"]
+    },
+    {
+      "name": "physical.read_state",
+      "description": "Read current live state and attributes of an allowlisted physical device.",
+      "regular_use": "Operator checks device state before preparing an action.",
+      "inputs": ["task_id", "device_id"]
+    },
+    {
+      "name": "physical.prepare_action",
+      "description": "Stage a prepared physical action for a device, capturing pre-state and validating cooldowns. Staged action expires if not executed.",
+      "regular_use": "Operator prepares an action record prior to requesting approval and execution.",
+      "inputs": ["task_id", "device_id", "service", "domain", "target_state", "ttl_seconds"]
+    },
+    {
+      "name": "physical.execute_action",
+      "description": "Execute a previously prepared physical action on an allowlisted device. Approval-gated.",
+      "regular_use": "Operator executes an approved physical action; enforces 3-call contract and attaches compensation contracts.",
+      "inputs": ["task_id", "action_id"]
+    },
+    {
+      "name": "physical.emergency_stop",
+      "description": "Immediately trigger emergency stop/off state for a specific device or all allowlisted physical devices. Auto-run safety brake.",
+      "regular_use": "Operator halts physical actuator operations immediately without approval delay.",
+      "inputs": ["task_id", "device_id"]
     }
   ]
 }

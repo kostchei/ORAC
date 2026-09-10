@@ -137,6 +137,56 @@ def execute_rollback(
                             ),
                         )
 
+            # Built-in physical state drift check
+            if tool.startswith("physical."):
+                from orac.physical_adapters import PhysicalAdapterSet  # noqa: PLC0415
+                from orac.physical_store import PhysicalStore  # noqa: PLC0415
+
+                pstore = PhysicalStore(store.root)
+                device_id = expected_state.get("device_id") or call_args.get("device_id")
+                action_id = call_args.get("action_id")
+                if action_id and not device_id:
+                    prep = pstore.get_prepared_action(str(action_id))
+                    if prep:
+                        device_id = prep.device_id
+
+                if device_id:
+                    device = pstore.get_device(str(device_id))
+                    if device is None:
+                        return RollbackResult(
+                            ok=False,
+                            message=f"Device {device_id!r} not found in physical store. Fail closed.",
+                        )
+                    read_handler = adapters.get("physical.read_state") if adapters else None
+                    if read_handler is not None:
+                        read_res = read_handler(
+                            CapabilityRequest(
+                                agent="human",
+                                tool="physical.read_state",
+                                task_id=note.task_id,
+                                args={"device_id": str(device_id)},
+                            )
+                        )
+                    else:
+                        pset = PhysicalAdapterSet(store.root, store=pstore)
+                        read_res = pset.physical_read_state(
+                            CapabilityRequest(
+                                agent="human",
+                                tool="physical.read_state",
+                                task_id=note.task_id,
+                                args={"device_id": str(device_id)},
+                            )
+                        )
+                    current_val = read_res.data.get("state", {}).get("state")
+                    if "state" in expected_state and current_val != expected_state["state"]:
+                        return RollbackResult(
+                            ok=False,
+                            message=(
+                                f"Device {device_id!r} state drifted from {expected_state['state']!r} "
+                                f"to {current_val!r}. Manual reconciliation required."
+                            ),
+                        )
+
         # Condition 2 & 6: Risk classification & execution
         try:
             mode = approval_mode_for(tool, call_args)

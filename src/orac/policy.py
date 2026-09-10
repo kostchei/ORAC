@@ -96,6 +96,13 @@ _ADAPTER_RISK: dict[str, RiskClass] = {
     "media.review_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "media.archive_asset": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     "media.publish_asset": RiskClass(Reversibility.IRREVERSIBLE, Externality.EXTERNAL_PUBLIC),
+    # Physical (Group 4). Allowlist inspection, state read, and emergency stop are AUTO (reversible/local).
+    # Staging/preparing actions is NOTIFY (reversible/physical). Executing physical action is APPROVE (irreversible/physical).
+    "physical.list_entities": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "physical.read_state": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
+    "physical.prepare_action": RiskClass(Reversibility.REVERSIBLE, Externality.PHYSICAL),
+    "physical.execute_action": RiskClass(Reversibility.IRREVERSIBLE, Externality.PHYSICAL),
+    "physical.emergency_stop": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),
     # Events / Human Sessions (Group 5). Session lifecycle, rounds, participant coordination,
     # and human inquiries are local and reversible.
     "event.create": RiskClass(Reversibility.REVERSIBLE, Externality.LOCAL),

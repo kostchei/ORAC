@@ -23,6 +23,7 @@ from orac.models import (
 from orac.comms_adapters import comms_adapters_for
 from orac.events_adapters import events_adapters_for
 from orac.media_adapters import media_adapters_for
+from orac.physical_adapters import physical_adapters_for
 from orac.policy import ApprovalMode, approval_mode_for, contract_denial, risk_class
 from orac.skills_adapters import skills_adapters_for
 from orac.tooling import RegularToolExecutor
@@ -124,6 +125,8 @@ class ToolBroker:
             adapters.update(comms_adapters_for(repo_root))
             # Media (Group 3): comfy.* and media.* tools.
             adapters.update(media_adapters_for(repo_root))
+            # Physical (Group 4): physical.* tools.
+            adapters.update(physical_adapters_for(repo_root))
             # Human Events (Group 5): event.* tools.
             adapters.update(events_adapters_for(repo_root))
         return adapters

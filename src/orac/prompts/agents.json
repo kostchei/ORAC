@@ -77,6 +77,16 @@
       "order": 80
     },
     {
+      "slug": "operator",
+      "name": "Operator",
+      "kind": "doer",
+      "purpose": "The only agent that controls physical devices and automation hub actuators. Reads state, stages prepared actions, executes approved actions, and triggers emergency stop.",
+      "prompt_file": "operator.md",
+      "protocol_file": "operator_max.json",
+      "tools": ["physical.list_entities", "physical.read_state", "physical.prepare_action", "physical.execute_action", "physical.emergency_stop", "skill.list", "skill.view"],
+      "order": 85
+    },
+    {
       "slug": "host",
       "name": "Host",
       "kind": "doer",

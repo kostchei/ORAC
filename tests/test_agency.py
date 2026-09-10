@@ -198,22 +198,37 @@ def test_run_goal_task_code_kind_rolls_summary_up(tmp_path) -> None:
 
 def test_work_kind_registry_covers_all_five_categories() -> None:
     assert set(WORK_KINDS) == {"code", "comms", "media", "physical", "event"}
-    # code is the bootstrap and has a doer; each kind states what done means
     assert WORK_KINDS["code"].doer_slug == "builder"
+    assert WORK_KINDS["comms"].doer_slug == "messenger"
+    assert WORK_KINDS["media"].doer_slug == "producer"
+    assert WORK_KINDS["physical"].doer_slug == "operator"
+    assert WORK_KINDS["event"].doer_slug == "host"
     assert all(spec.done_means for spec in WORK_KINDS.values())
 
 
-def test_non_code_kind_without_doer_blocks_visibly(tmp_path) -> None:
+def test_non_code_kind_without_doer_blocks_visibly(tmp_path, monkeypatch) -> None:
     broker, _ = _setup(tmp_path)
     board = Board()
-    parent = Task(title="toggle a relay", status=TaskStatus.IN_PROGRESS)
+    parent = Task(title="financial transaction", status=TaskStatus.IN_PROGRESS)
     board.add_task(parent)
+
+    from orac.work import WorkKindSpec
+    monkeypatch.setitem(
+        WORK_KINDS,
+        "financial",
+        WorkKindSpec(
+            kind="financial",
+            doer_slug=None,
+            done_means="funds settled",
+            contract_rules="funds transferred",
+        ),
+    )
 
     child = run_goal_task(
         board, parent,
-        goal="toggle smart plug relay",
-        acceptance_criteria=("relay state is ON",),
-        work_kind="physical",  # Operator (Group 4) not built yet: still no doer
+        goal="transfer funds",
+        acceptance_criteria=("funds transferred",),
+        work_kind="financial",  # Stub kind without doer
         brain=ScriptedBrain([]),  # must never be consulted: no doer exists
         broker=broker, context={},
     )

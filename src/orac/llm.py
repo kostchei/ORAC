@@ -209,6 +209,13 @@ class LMStudioBrain(OpenAICompatibleBrain):
         default_factory=lambda: os.environ.get("ORAC_LMSTUDIO_URL", "http://localhost:1234/v1")
     )
     model: str = field(default_factory=lambda: os.environ.get("ORAC_LMSTUDIO_MODEL", "local-model"))
+    api_key: str | None = field(default_factory=lambda: _lmstudio_api_key())
+
+
+def _lmstudio_api_key() -> str | None:
+    from orac.credentials import lmstudio_api_token
+
+    return lmstudio_api_token()
 
 
 @dataclass

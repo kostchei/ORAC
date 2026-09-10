@@ -215,6 +215,86 @@ def check_standing_grant_cap(root: Path) -> Check:
     return Check("standing-grant cap", "grant allowed one APPROVE-gated call, then parked over cap")
 
 
+def check_physical_dispatch_and_standing_grant(root: Path) -> Check:
+    from orac.physical_store import PhysicalStore
+
+    store = _init_repo(root / "physical-dispatch")
+    pstore = PhysicalStore(store.root)
+    broker = _broker(store)
+    task = Task(id="t-phys-1", title="operate devices", status=TaskStatus.IN_PROGRESS)
+
+    # 1. Read state is AUTO -> allowed immediately
+    read_req = CapabilityRequest(
+        agent="Operator",
+        tool="physical.read_state",
+        task_id=task.id,
+        args={"device_id": "living_room_light"},
+    )
+    read_res = broker.request(read_req, task)
+    assert read_res.status is CapabilityStatus.ALLOWED
+
+    # 2. Prepare action is NOTIFY -> allowed immediately
+    prep_req = CapabilityRequest(
+        agent="Operator",
+        tool="physical.prepare_action",
+        task_id=task.id,
+        args={"device_id": "living_room_light", "service": "turn_on"},
+    )
+    prep_res = broker.request(prep_req, task)
+    assert prep_res.status is CapabilityStatus.ALLOWED
+    action_id = prep_res.data["id"]
+
+    # 3. Execute action without standing grant -> parked as PENDING
+    exec_req = CapabilityRequest(
+        agent="Operator",
+        tool="physical.execute_action",
+        task_id=task.id,
+        args={"action_id": action_id},
+    )
+    exec_res = broker.request(exec_req, task)
+    assert exec_res.status is CapabilityStatus.PENDING
+    assert len(store.list_pending()) == 1
+
+    # 4. Create standing grant with daily_cap=1 for Operator on execute_action
+    store.create_standing_grant(
+        "Operator", "physical.execute_action", daily_cap=1, reason="daily light automation"
+    )
+
+    # Create fresh prepared action for the standing grant run
+    pstore.record_device_action("living_room_light", action_time="2020-01-01T00:00:00+00:00")
+    prep2 = pstore.create_prepared_action(
+        task_id=task.id, device_id="living_room_light", service="turn_on"
+    )
+    exec_req2 = CapabilityRequest(
+        agent="Operator",
+        tool="physical.execute_action",
+        task_id=task.id,
+        args={"action_id": prep2.id},
+    )
+    exec_res2 = broker.request(exec_req2, task)
+    assert exec_res2.status is CapabilityStatus.ALLOWED
+    assert any(n.tool == "physical.execute_action" for n in store.list_notifications())
+
+    # 5. Second execute call exceeds daily cap -> parks as PENDING
+    pstore.record_device_action("living_room_light", action_time="2020-01-01T00:00:00+00:00")
+    prep3 = pstore.create_prepared_action(
+        task_id=task.id, device_id="living_room_light", service="turn_off"
+    )
+    exec_req3 = CapabilityRequest(
+        agent="Operator",
+        tool="physical.execute_action",
+        task_id=task.id,
+        args={"action_id": prep3.id},
+    )
+    exec_res3 = broker.request(exec_req3, task)
+    assert exec_res3.status is CapabilityStatus.PENDING
+
+    return Check(
+        "physical dispatch & standing grant",
+        "read_state AUTO, prepare_action NOTIFY, execute_action APPROVE parked then cleared via standing grant",
+    )
+
+
 CHECKS: tuple[Callable[[Path], Check], ...] = (
     check_clean_dispatch,
     check_intent_blocks_closed_task,
@@ -223,6 +303,7 @@ CHECKS: tuple[Callable[[Path], Check], ...] = (
     check_sentinel_escalates_before_dispatch,
     check_git_push_notifies,
     check_standing_grant_cap,
+    check_physical_dispatch_and_standing_grant,
 )
 
 

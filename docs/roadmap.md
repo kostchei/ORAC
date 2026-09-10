@@ -227,9 +227,9 @@ risk model. Detail + tool lists in [tool-categories.md](tool-categories.md).
 - [x] **Operational durability (parallel/after Media).** Board event-log rotation/compaction (`orac board compact`);
       board task pruning/reconciliation (`orac board prune`); active Windows toast notifications
       for approval/review items; clean telemetry.
-- [ ] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; explicit device
+- [x] **Group 4 — Physical.** `read_state / prepare_action / execute_action`; explicit device
       allowlists, cooldowns, rate limits, captured pre-state; e-stop; Home Assistant / MQTT first.
-      Approval by default.
+      Approval by default. Operator doer agent (`doer_slug="operator"`).
 - [x] **Group 5 — Human Events.** A workflow layer *above* the broker — sessions, participants,
       rounds, timers, human-input waits, resume/broadcast, closure — kept separate from the broker
       itself, consuming it cleanly via `EventsStore`, `Host` agent (`doer_slug="host"`), and

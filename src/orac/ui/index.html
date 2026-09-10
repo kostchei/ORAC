@@ -212,6 +212,24 @@
       <div class="settings-tabs" role="tablist" aria-label="Settings">
         <button class="settings-tab active" type="button" role="tab" aria-selected="true">Connections</button>
       </div>
+      <section class="panel lmstudio-panel">
+        <div class="chat-channel-head">
+          <div>
+            <span class="kicker">Local inference</span>
+            <h3>LM Studio</h3>
+          </div>
+          <span id="lmstudio-token-status" class="service-state">token not configured</span>
+        </div>
+        <p class="settings-help">Paste the LM Studio API token once. ORAC stores it with Windows DPAPI and never puts it in project config or logs.</p>
+        <form id="lmstudio-token-form" class="chat-form">
+          <label>
+            API token
+            <input id="lmstudio-api-token" type="password" autocomplete="new-password" placeholder="Paste LM Studio token" required />
+          </label>
+          <button type="submit">Save Token</button>
+        </form>
+        <div id="lmstudio-token-message" class="settings-status"></div>
+      </section>
       <section class="panel chat-panel">
         <div class="chat-runtime">
           <div>

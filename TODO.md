@@ -30,7 +30,13 @@ the code-writing and communications surfaces already present.
   participant management (`event.add_participant`), human input waits and responses
   (`event.ask_human`, `event.wait_for_response`), broadcasts (`event.broadcast_update`),
   `verify_event_closed` verifier, and operator CLI (`orac event list/show/respond`).
-- [ ] **Group 4 — Physical**, per `docs/roadmap.md`.
+- [x] **Group 4 — Physical.** Device control via Home Assistant / MQTT adapters
+  (`PhysicalAdapterSet`, `LocalMockHomeAssistantBackend`, `HomeAssistantRESTBackend`),
+  `PhysicalStore` (`.orac/physical.db`), device allowlisting and cooldowns,
+  3-call contract (`physical.read_state` / `prepare_action` / `execute_action`),
+  emergency stop (`physical.emergency_stop`), Operator agent (`doer_slug="operator"`),
+  risk classification (APPROVE by default for execution), compensating state drift
+  checks, and `orac physical` CLI. Per `docs/physical-plan.md` and `docs/roadmap.md`.
 
 ## Immediate Operational Readiness
 

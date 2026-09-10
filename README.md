@@ -185,6 +185,10 @@ higher next time. See [docs/knowledge.md](docs/knowledge.md).
 
 ORAC expects LM Studio's local OpenAI-compatible server at `http://localhost:1234/v1` by default. When ORAC starts, it starts the LM Studio server if the `lms` CLI is available. If a local model is already loaded, ORAC keeps it. If no model is loaded, ORAC checks available RAM and loads the largest suitable local model it can fit within the resource policy, preferring tool-use models when possible.
 
+The recommended Roo Code setup is documented in [docs/roo-code.md](docs/roo-code.md). The repository recommends the Roo Code VS Code extension and includes project rules under `.roo/rules/`. The current configured code model is `qwen/qwen3-coder-next`.
+
+When LM Studio authentication is enabled, open ORAC's `Settings` → `Connections` panel and paste the token into the LM Studio card. ORAC stores it with Windows DPAPI; it is not written to the checked-in model policy.
+
 Useful commands:
 
 ```powershell

@@ -388,6 +388,20 @@ def make_parser() -> argparse.ArgumentParser:
     ev_close = event_sub.add_parser("close", help="Close an event session.")
     ev_close.add_argument("event_id", help="Event session id.")
     ev_close.add_argument("--summary", default="", help="Closing summary.")
+
+    physical = subparsers.add_parser("physical", help="Physical device and automation hub operations (Group 4).")
+    physical_sub = physical.add_subparsers(dest="physical_command", required=True)
+    phys_list = physical_sub.add_parser("list", help="List allowlisted physical devices.")
+    phys_read = physical_sub.add_parser("read", help="Read state of a physical device.")
+    phys_read.add_argument("device_id", help="Device id.")
+    phys_stop = physical_sub.add_parser("stop", help="Execute emergency stop for a device or all devices.")
+    phys_stop.add_argument("--device", dest="device_id", default=None, help="Optional device id (default: stop all).")
+    phys_allow = physical_sub.add_parser("allow", help="Register a device on the physical allowlist.")
+    phys_allow.add_argument("device_id", help="Device id (e.g. feeder_1).")
+    phys_allow.add_argument("entity_id", help="Home Assistant entity id (e.g. switch.fish_feeder).")
+    phys_allow.add_argument("--name", default="", help="Friendly name.")
+    phys_allow.add_argument("--cooldown", type=int, default=60, help="Cooldown seconds (default: 60).")
+    phys_allow.add_argument("--backend", default="mock", help="Backend type (default: mock).")
     run.add_argument(
         "--brain",
         choices=["auto", "rules", "ollama", "lmstudio", "foundation"],
@@ -1316,6 +1330,104 @@ def cmd_event_close(store: BoardStore, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_physical_list(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.physical_adapters import PhysicalAdapterSet
+    from orac.physical_store import PhysicalStore
+
+    pstore = PhysicalStore(store.root)
+    pset = PhysicalAdapterSet(store.root, store=pstore)
+    res = pset.physical_list_entities(
+        CapabilityRequest(agent="human", tool="physical.list_entities", task_id="cli", args={})
+    )
+    devices = res.data.get("devices", [])
+    if not devices:
+        print("No allowlisted physical devices found.")
+        return 0
+    print(f"{len(devices)} allowlisted physical device(s):")
+    for dev in devices:
+        curr_state = dev.get("current_state", {}).get("state", "unknown")
+        cd_info = (
+            f" [COOLDOWN: {dev.get('cooldown_remaining_seconds', 0):.1f}s remaining]"
+            if dev.get("in_cooldown")
+            else ""
+        )
+        print(
+            f"  [{dev['id']}] '{dev['name']}' ({dev['entity_id']}) — state: {curr_state}, cooldown: {dev['cooldown_seconds']}s{cd_info}"
+        )
+    return 0
+
+
+def cmd_physical_read(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.physical_adapters import PhysicalAdapterSet
+    from orac.physical_store import PhysicalStore
+
+    pstore = PhysicalStore(store.root)
+    pset = PhysicalAdapterSet(store.root, store=pstore)
+    try:
+        res = pset.physical_read_state(
+            CapabilityRequest(
+                agent="human",
+                tool="physical.read_state",
+                task_id="cli",
+                args={"device_id": args.device_id},
+            )
+        )
+    except Exception as exc:
+        print(f"Error reading physical device: {exc}")
+        return 1
+    data = res.data
+    st = data.get("state", {})
+    cd_status = (
+        f"ACTIVE ({data.get('cooldown_remaining_seconds', 0):.1f}s remaining)"
+        if data.get("in_cooldown")
+        else "Ready"
+    )
+    print(f"Device [{data['device_id']}] '{data['name']}' ({data['entity_id']})")
+    print(f"  State:     {st.get('state', 'unknown')}")
+    print(f"  Cooldown:  {cd_status}")
+    if st.get("attributes"):
+        print(f"  Attributes: {json.dumps(st.get('attributes'), indent=2)}")
+    return 0
+
+
+def cmd_physical_stop(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.physical_adapters import PhysicalAdapterSet
+    from orac.physical_store import PhysicalStore
+
+    pstore = PhysicalStore(store.root)
+    pset = PhysicalAdapterSet(store.root, store=pstore)
+    device_id = getattr(args, "device_id", None)
+    call_args = {"device_id": device_id} if device_id else {}
+    res = pset.physical_emergency_stop(
+        CapabilityRequest(
+            agent="human",
+            tool="physical.emergency_stop",
+            task_id="cli",
+            args=call_args,
+        )
+    )
+    print(res.message)
+    return 0
+
+
+def cmd_physical_allow(store: BoardStore, args: argparse.Namespace) -> int:
+    from orac.physical_store import PhysicalStore
+
+    pstore = PhysicalStore(store.root)
+    name = args.name or args.device_id
+    dev = pstore.register_device(
+        device_id=args.device_id,
+        name=name,
+        entity_id=args.entity_id,
+        backend=args.backend,
+        cooldown_seconds=args.cooldown,
+    )
+    print(
+        f"Registered allowlisted device [{dev.id}] '{dev.name}' -> {dev.entity_id} (cooldown: {dev.cooldown_seconds}s)."
+    )
+    return 0
+
+
 def cmd_status(store: BoardStore) -> int:
     bstore = BrokerStore(store.root).init()
     policy_store = ModelPolicyStore(store)
@@ -1489,6 +1601,14 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_event_advance(store, args)
     if args.command == "event" and args.event_command == "close":
         return cmd_event_close(store, args)
+    if args.command == "physical" and args.physical_command == "list":
+        return cmd_physical_list(store, args)
+    if args.command == "physical" and args.physical_command == "read":
+        return cmd_physical_read(store, args)
+    if args.command == "physical" and args.physical_command == "stop":
+        return cmd_physical_stop(store, args)
+    if args.command == "physical" and args.physical_command == "allow":
+        return cmd_physical_allow(store, args)
 
     parser.error("Unknown command.")
     return 2
